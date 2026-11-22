@@ -1,0 +1,28 @@
+{
+  "id": "./",
+  "name": "Правда или Действие 18+",
+  "short_name": "Правда 18+",
+  "description": "Тёмная вечерняя игра «Правда или Действие» для взрослой компании: три характера ИИ-ведущего, три уровня градуса и общий замес каждые пять ходов.",
+  "lang": "ru",
+  "dir": "ltr",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "theme_color": "#08070c",
+  "background_color": "#08070c",
+  "icons": [
+    {
+      "src": "./icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "./icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
