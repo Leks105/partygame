@@ -191,6 +191,17 @@
           </button>
         </div>
 
+        <div class="quick-actions" aria-label="Дополнительные режимы">
+          <button class="quick-mode paranoia-mode" id="paranoiaBtn" type="button">
+            <span class="quick-mode-emoji" aria-hidden="true">🕵️</span>
+            <span>Паранойя</span>
+          </button>
+          <button class="quick-mode curse-mode" id="curseBtn" type="button">
+            <span class="quick-mode-emoji" aria-hidden="true">☠️</span>
+            <span>Проклясть</span>
+          </button>
+        </div>
+
         <div class="turnline">
           <div class="turn-player">
             <span class="turn-pulse" aria-hidden="true"></span>
@@ -216,6 +227,11 @@
           <span id="levelModeHint">растёт с ходами</span>
         </div>
       </header>
+
+      <div class="curse-bar hidden" id="curseBar" aria-label="Активные проклятия">
+        <span class="curse-bar-label" aria-hidden="true">☠️</span>
+        <div class="curse-chips" id="curseChips"></div>
+      </div>
 
       <main class="game-stage">
         <section class="choose-screen" id="chooseScreen" aria-labelledby="choosePlayerName">
@@ -270,6 +286,7 @@
             </header>
             <div class="card-content" id="cardContent" aria-live="polite"></div>
             <footer class="card-actions">
+              <button class="btn curse-take-btn card-action-wide" id="takeCurseBtn" type="button" hidden>☠️ Слиться (взять проклятие)</button>
               <button class="btn btn-ghost" id="anotherCardBtn" type="button">Другое задание</button>
               <button class="btn btn-primary" id="doneTurnBtn" type="button">Выполнено (следующий ход)</button>
             </footer>
@@ -294,6 +311,129 @@
       <footer class="group-actions">
         <button class="btn btn-ghost" id="groupAnotherBtn" type="button">Другое задание</button>
         <button class="btn btn-group" id="groupEndBtn" type="button">Замес окончен — идем дальше</button>
+      </footer>
+    </section>
+  </div>
+
+  <div class="modal paranoia-overlay hidden" id="paranoiaOverlay" aria-hidden="true">
+    <div class="paranoia-glow" aria-hidden="true"></div>
+    <section class="paranoia-panel" role="dialog" aria-modal="true" aria-labelledby="paranoiaTitle">
+      <div class="paranoia-main" id="paranoiaMain">
+        <header class="paranoia-head">
+          <span class="paranoia-sigil" aria-hidden="true">🕵️</span>
+          <div class="paranoia-heading">
+            <p class="paranoia-kicker">Скрытый вопрос и монетка</p>
+            <h2 id="paranoiaTitle">ПАРАНОЙЯ</h2>
+          </div>
+          <span class="paranoia-level" id="paranoiaLevelLabel">Уровень 1</span>
+        </header>
+
+        <div class="paranoia-content">
+          <p class="paranoia-phone">Передайте телефон: <strong id="paranoiaPlayer">—</strong></p>
+          <p class="paranoia-roast" id="paranoiaRoast"></p>
+
+          <div class="paranoia-question-zone" id="paranoiaQuestionZone" role="button" tabindex="0" aria-label="Зажмите и держите, чтобы прочитать вопрос">
+            <span class="paranoia-question-hint" id="paranoiaQuestionHint">Зажми и держи, чтобы прочитать вопрос</span>
+            <p class="paranoia-question-text" id="paranoiaQuestionText" hidden></p>
+          </div>
+
+          <p class="paranoia-instruction">Прочитай молча → назови имя игрока вслух (или ткни пальцем) → бросай монетку.</p>
+
+          <div class="paranoia-coin-stage" id="paranoiaCoinStage">
+            <div class="paranoia-coin" id="paranoiaCoin" aria-hidden="true"><span>50/50</span></div>
+            <p class="paranoia-coin-label" id="paranoiaCoinLabel">Монетка решит судьбу вопроса</p>
+          </div>
+        </div>
+
+        <footer class="paranoia-actions">
+          <button class="btn btn-ghost" id="paranoiaAnotherBtn" type="button">Другой вопрос</button>
+          <button class="btn btn-paranoia" id="paranoiaCoinBtn" type="button" disabled>🪙 Бросить монетку (50/50)</button>
+        </footer>
+      </div>
+
+      <div class="paranoia-result hidden" id="paranoiaResult">
+        <span class="paranoia-result-icon" id="paranoiaResultIcon" aria-hidden="true">🔥</span>
+        <p class="paranoia-result-kicker" id="paranoiaResultKicker">Монетка решила</p>
+        <h2 id="paranoiaResultTitle">ВСКРЫТЬ!</h2>
+        <p class="paranoia-result-text" id="paranoiaResultText"></p>
+        <button class="btn btn-paranoia" id="paranoiaNextBtn" type="button">Идем дальше</button>
+      </div>
+    </section>
+  </div>
+
+  <div class="modal curse-overlay hidden" id="curseOverlay" aria-hidden="true">
+    <div class="curse-glow" aria-hidden="true"></div>
+    <section class="curse-panel" role="dialog" aria-modal="true" aria-labelledby="curseOverlayTitle">
+      <header class="curse-head">
+        <span class="curse-skull" aria-hidden="true">☠️</span>
+        <div class="curse-heading">
+          <p class="curse-kicker">Липкое проклятие · 2 круга</p>
+          <h2 id="curseOverlayTitle">Проклятие ведущего</h2>
+        </div>
+        <span class="curse-level" id="curseLevelLabel">Уровень 1</span>
+      </header>
+
+      <div class="curse-content">
+        <p class="curse-player">Достаётся: <strong id="curseOverlayPlayer">—</strong></p>
+        <p class="curse-roast" id="curseOverlayRoast"></p>
+
+        <div class="curse-rule-box">
+          <p class="curse-label">Правило проклятия</p>
+          <p class="curse-rule-text" id="curseOverlayRule"></p>
+        </div>
+
+        <div class="curse-penalty-preview">
+          <p class="curse-penalty-label">🚨 Если поймают на нарушении</p>
+          <p class="curse-penalty-text" id="curseOverlayPenalty"></p>
+          <p class="curse-timer-note" id="curseOverlayTimerInfo"></p>
+        </div>
+      </div>
+
+      <footer class="curse-actions">
+        <button class="btn btn-curse" id="curseOverlayCloseBtn" type="button">Принял проклятие — следующий ход</button>
+      </footer>
+    </section>
+  </div>
+
+  <div class="modal curse-detail-overlay hidden" id="curseDetailOverlay" aria-hidden="true">
+    <section class="curse-detail-box" role="dialog" aria-modal="true" aria-labelledby="curseDetailTitle">
+      <header class="curse-detail-head">
+        <div>
+          <p class="curse-detail-kicker">Активное проклятие</p>
+          <h2 id="curseDetailTitle">Проклятие</h2>
+        </div>
+        <button class="icon-button" id="curseDetailCloseBtn" type="button" aria-label="Закрыть проклятие">
+          <svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg>
+        </button>
+      </header>
+
+      <div class="curse-detail-body">
+        <p class="curse-detail-player">Носитель: <strong id="curseDetailPlayer">—</strong></p>
+        <p class="curse-detail-rule" id="curseDetailRule"></p>
+        <p class="curse-detail-turns">Осталось ходов: <b id="curseDetailTurns">2</b></p>
+
+        <button class="btn curse-penalty-btn" id="cursePenaltyBtn" type="button">🚨 Попался! (Штраф)</button>
+
+        <div class="curse-penalty-block hidden" id="cursePenaltyBlock">
+          <p class="curse-penalty-block-label">Штраф за нарушение</p>
+          <p class="curse-penalty-block-text" id="cursePenaltyText"></p>
+          <div class="timer curse-fail-timer hidden" id="curseFailTimer">
+            <div class="timer-head">
+              <span>Таймер штрафа</span>
+              <span class="timer-status" id="curseFailStatus">готов</span>
+            </div>
+            <div class="timer-digits" id="curseFailDigits">00:20</div>
+            <div class="timer-track"><div class="timer-fill" id="curseFailFill"></div></div>
+            <div class="timer-controls">
+              <button class="timer-btn" id="curseFailToggle" type="button">Старт</button>
+              <button class="timer-btn is-secondary" id="curseFailReset" type="button">Сброс</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <footer class="curse-detail-actions">
+        <button class="btn curse-remove-btn" id="curseRemoveBtn" type="button">Снять досрочно</button>
       </footer>
     </section>
   </div>
@@ -335,6 +475,22 @@
 
         <a class="external-link" href="https://platform.deepseek.com/api_keys" target="_blank" rel="noopener noreferrer">Где взять ключ <span aria-hidden="true">↗</span></a>
         <p class="settings-footnote">Без ключа ведущий не сможет придумать ни одной карточки.</p>
+
+        <div class="theme-memory">
+          <div class="theme-memory-head">
+            <span class="theme-memory-title">Память тем</span>
+            <span class="theme-memory-count" id="themeMemoryCount">Запомнено тем: 0</span>
+          </div>
+          <p class="theme-memory-copy">Темы и перемешанная колода сохраняются между вечеринками, чтобы задания не повторялись.</p>
+          <button class="btn btn-quiet theme-memory-reset" id="resetThemeMemoryBtn" type="button" aria-expanded="false" aria-controls="themeMemoryConfirm">🧹 Сбросить память тем</button>
+          <div class="theme-memory-confirm hidden" id="themeMemoryConfirm">
+            <p>Очистить всю память тем? Новые задания начнутся с чистого листа.</p>
+            <div class="theme-memory-confirm-actions">
+              <button class="btn btn-quiet" id="cancelThemeMemoryBtn" type="button">Отмена</button>
+              <button class="btn btn-danger" id="confirmThemeMemoryBtn" type="button">Очистить</button>
+            </div>
+          </div>
+        </div>
       </div>
 
       <footer class="sheet-actions">
@@ -372,7 +528,7 @@
       <span class="confirm-symbol" aria-hidden="true">!</span>
       <p class="confirm-kicker">Досрочное завершение</p>
       <h2 id="confirmEndTitle">Завершить партию?</h2>
-      <p id="confirmEndText">Текущий ход, прогресс и заготовленные карточки сбросятся. Игроки, характеры и настройки останутся.</p>
+      <p id="confirmEndText">Текущий ход, прогресс и заготовленные карточки сбросятся. Игроки, характеры, настройки и память тем останутся.</p>
       <div class="confirm-actions">
         <button class="btn btn-quiet" id="confirmCancelBtn" type="button">Остаться</button>
         <button class="btn btn-danger" id="confirmEndBtn" type="button">Завершить партию</button>

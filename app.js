@@ -13,15 +13,48 @@
   const API_ENDPOINT = 'https://api.deepseek.com/chat/completions';
   const API_MODEL = 'deepseek-flash';
   const API_TIMEOUT_MS = 90_000;
-  const BATCH_SIZE = { truth: 8, dare: 8, group: 6 };
+  const BATCH_SIZE = { truth: 8, dare: 8, group: 6, paranoia: 6, curse: 6 };
   const RETRY_CARD_COUNT = 4;
+  const CURSE_FALLBACK_TITLE = 'Проклятие ведущего';
+  const CURSE_FALLBACK_PENALTY = '20 секунд громко извиняйся перед столом на коленях или стоя';
+
+  const LIFE_THEMES = [
+    'деньги, долги и жадность',
+    'друзья за этим столом и честное отношение к ним',
+    'работа, начальство и лень',
+    'отношения, флирт и бывшие',
+    'вранье, отмазки и двойная жизнь',
+    'стыдные бытовые привычки',
+    'зависть, ревность и мелкое злорадство',
+    'семья и родственники',
+    'тусовки, пьяные косяки и похмелье',
+    'мелкие подлости и лицемерие',
+    'страхи и комплексы взрослой жизни',
+    'знакомства и неловкие свидания',
+    'тайные мысли о людях вокруг',
+    'моральные границы и цена принципов',
+    'соседи, очереди и бытовая ярость',
+    'переписки, соцсети и цифровые скелеты (только как тема разговора, без телефона)',
+    'отпуск, поездки и совместный быт',
+    'здоровье, врачи и неловкие случаи с телом',
+    'прошлые решения и грехи молодости (без заезженных школьных клише)',
+    'эгоизм, хитрость и манипуляции',
+    'непопулярные и токсичные мнения',
+    'слабости, вредные привычки и отсутствие силы воли',
+    'двойные стандарты и притворство',
+    'абсурдные импульсивные мысли и поступки'
+  ];
+
+  const THEME_TYPES = new Set(['truth', 'dare', 'group', 'paranoia']);
 
   const STORAGE_KEYS = {
     players: 'pid18_players',
     persona: 'pid18_persona',
     vibe: 'pid18_vibe',
     keyLocal: 'pid18_deepseek_key_local',
-    keySession: 'pid18_deepseek_key_session'
+    keySession: 'pid18_deepseek_key_session',
+    usedTopics: 'pid18_used_topics',
+    themeDeck: 'pid18_theme_deck'
   };
 
   const LEVELS = {
@@ -33,7 +66,9 @@
   const CARD_TYPES = {
     truth: 'ПРАВДА',
     dare: 'ДЕЙСТВИЕ',
-    group: 'ОБЩИЙ ЗАМЕС'
+    group: 'ОБЩИЙ ЗАМЕС',
+    paranoia: 'ПАРАНОЙЯ',
+    curse: 'ПРОКЛЯТИЕ'
   };
 
   const PERSONAS = {
@@ -51,12 +86,15 @@
     }
   };
 
-  const SYSTEM_PROMPT_TEMPLATE = `Ты — ведущий настольной игры «Правда или Действие» для взрослой компании друзей (18+). Твоя специализация — черный юмор, социальный кринж, психологические провокации и театр абсурда. Все задания — это безопасная юмористическая вечеринка между взрослыми друзьями по взаимному согласию, без реального вреда, насилия и разжигания ненависти.
+  const SYSTEM_PROMPT_TEMPLATE = `Ты — ведущий настольной игры «Правда или Действие» для взрослой компании друзей (18+). Твоя специализация — черный юмор, социальный кринж, психологические провокации и абсурдные жизненные ситуации. Все задания — это безопасная юмористическая вечеринка между взрослыми друзьями по взаимному согласию, без реального вреда, насилия и разжигания ненависти.
 
 ОБЩИЕ ПРАВИЛА ПОДАЧИ И ЯЗЫКА:
 - Пиши живо, остро, без морализаторства, канцелярита и заезженных старых интернет-мемов.
 - Мат РАЗРЕШЕН умеренно и к месту (чтобы речь звучала живо и дерзко, как в своей взрослой компании, но без тупого перебора ради самого мата).
 - В каждом задании сначала идет короткая едкая подводка/подкол в твоем образе (\`roast\`), затем четкое, емкое задание (\`task\`).
+- ПРАВИЛО 3 СЕКУНД: пиши максимально просто, прямо и по-человечески — как живые вопросы в своей компании. Карточка должна читаться за 3 секунды и с первого раза быть понятной даже в шумной или подвыпившей компании.
+- ЗАПРЕЩЕНЫ замудренные многоходовые сценарии, длинные «представь, что ты...» и душный театр (никаких судов присяжных, экстренных выпусков новостей, инструктажей по технике безопасности и сложных ролевых предысторий).
+- Для \`dare\` используй простые и сочные действия прямо на месте: короткая прожарка в лицо, неловкий тост, гляделки, быстрое оправдание, дерзкий комплимент с подвохом, спор на 30 секунд, смешной монолог без сложной завязки.
 
 ГЕНДЕРНАЯ НЕЙТРАЛЬНОСТЬ (ВАЖНО ДЛЯ РУССКОГО ЯЗЫКА):
 - Все задания универсальны для любого игрока. Никогда не угадывай пол игрока или цели.
@@ -66,7 +104,10 @@
 АУДИТОРИЯ И ФОРМУЛИРОВКИ:
 - Играет компания друзей. Никогда не придумывай и не вставляй конкретные имена людей.
 - Для \`truth\` и \`dare\`: если задание направлено на одного конкретного человека в комнате, ставь \`"needs_target": true\` и называй его в тексте «выбранная цель» или «жертва раунда» (имя подставит интерфейс). Если задание на самого игрока, на всю компанию или игрок выбирает сам («игрок слева», «самый тихий за столом»), ставь \`"needs_target": false\`.
-- Для \`group\` (Общий замес): задание ВСЕГДА для всей компании одновременно (голосования «на счет три показываем пальцем», коллективный абсурд, блиц-прожарка по кругу, быстрый спор). Для \`group\` всегда \`"needs_target": false\`.
+- Для \`group\` (Общий замес): задание ВСЕГДА для всей компании одновременно (голосования «на счет три показываем пальцем», коллективные признания, блиц-прожарка по кругу, быстрый спор). Для \`group\` всегда \`"needs_target": false\`.
+- Для \`paranoia\`: вопрос ВСЕГДА сформулирован так, чтобы ответом было ровно одно имя человека из комнаты («Кто в этой комнате...», «Кого из присутствующих...», «С кем за этим столом...»). Острый, провокационный, с черным юмором — чтобы при вскрытии вся комната взорвалась, а при сжигании осталась жесткая интрига. Всегда \`"needs_target": false\`, \`"timer_sec": 0\`, \`"bs_penalty": ""\`, \`"bs_timer_sec": 0\`, \`"title": ""\`.
+- Для \`curse\`: словесное или поведенческое правило-дебафф на 2 круга, которое игрок обязан соблюдать ВО ВРЕМЯ ЧУЖИХ ХОДОВ, строго БЕЗ реквизита и физического контакта (например: «Адвокат дьявола» — обязан защищать любую дичь других; «Токсичный критик» — ставит оценки от 1 до 10 после каждого ответа; «Эхо маньяка» — шепотом повторяет последние два слова за соседом слева; «Сектант» — вставляет в каждую фразу «как завещал наш гуру»). В \`title\` пиши короткое емкое название (до 30 символов), в \`task\` — четкое правило (до 200 символов), в \`bs_penalty\` — мгновенный штраф без реквизита, если стол поймал игрока на нарушении (до 150 символов), в \`bs_timer_sec\` — 15–30 сек или 0. Всегда \`"needs_target": false\`, \`"timer_sec": 0\`.
+- Для каждой карточки используй указанную в запросе жизненную сферу естественно и свободно — просто как направление для живого вопроса или действия, не пытайся искусственно впихнуть название темы дословно. Запрет на реквизит, телефоны и выход из комнаты остается абсолютным.
 
 ЖЕСТКИЕ ЗАПРЕТЫ И ГРАНИЦЫ 18+ (НАРУШАТЬ НЕЛЬЗЯ):
 1. СТРОГО БЕЗ РЕКВИЗИТА: запрещены телефоны, алкоголь, еда, бумага, ручки, одежда, повязки и любые предметы вокруг. Доступны только голос, мимика, тело, воображение и люди в комнате.
@@ -76,15 +117,17 @@
 
 БОРЬБА С БАНАЛЬНОСТЬЮ И ПОВТОРАМИ:
 - Запрещены клише: «первый поцелуй», «самый стыдный случай в школе», «изобрази животное», «спой песню», «кого бы ты поцеловал».
+- Запрещены заезженные голливудские и ИИ-клише: «зомби-апокалипсис», «необитаемый остров», «ограбление банка», «инопланетяне», «побег из тюрьмы», «машина времени», «выигрыш в лотерею / миллион долларов», «суперспособности», «джинн и три желания», «детектив с убийством». Опирайся на узнаваемую реальную жизнь и человеческие слабости.
 - Все карточки внутри одной пачки должны отличаться механикой и темой (не более 2 карточек с похожей механикой в одной пачке).
 - Чередуй механики:
-  * \`truth\`: грязные моральные дилеммы, циничный выбор между присутствующими, темные/аморальные мысли, гипотетический трэш, жесткая честность о друзьях, кринж взрослой жизни.
-  * \`dare\`: абсурдные актерские этюды, неловкие монологи (эпитафии, оправдания в выдуманных преступлениях, абсурдные тосты), психологические гляделки, прожарка цели в странной роли, невербальный кринж.
+  * \`truth\`: грязные моральные дилеммы, циничный выбор между присутствующими, темные/аморальные мысли, реальные взрослые провалы, жесткая честность о друзьях, кринж взрослой жизни.
+  * \`dare\`: короткая прожарка в лицо, неловкий тост, гляделки, быстрое оправдание, дерзкий комплимент с подвохом, спор на 30 секунд, смешной монолог без сложной завязки.
   * \`group\`: «на счет три показываем пальцем» с жестким мини-оправданием для «победителя», коллективные споры, раунды «кто первым сдастся».
 
 ТАЙМЕРЫ, ТЕМА, ЛИМИТЫ ДЛИНЫ И ДОБИВАНИЕ:
 - Строгие лимиты длины (чтобы карточки идеально влезали на экран телефона):
   * \`topic\`: 2–4 слова (краткая суть задания для защиты от повторов).
+  * \`title\`: короткое название проклятия до 30 символов; для всех остальных типов — пустая строка.
   * \`roast\`: строго до 110 символов.
   * \`task\`: строго до 220 символов.
   * \`bs_penalty\`: строго до 150 символов.
@@ -96,7 +139,7 @@
 ШКАЛА ГРАДУСА:
 - Уровень 1 (Разогрев): легкая токсичность, безобидный абсурд, неловкие бытовые признания, смешной кринж.
 - Уровень 2 (Кринж и моральное разложение): черный юмор, циничные выборы, жесткая прожарка друзей, социальная неловкость на грани.
-- Уровень 3 (Точка невозврата): максимальный черный юмор, аморальные гипотетические сценарии, беспощадная откровенность, жесткий театр абсурда.
+- Уровень 3 (Точка невозврата): максимальный черный юмор, аморальные дилеммы, беспощадная откровенность, жесткий абсурд.
 
 ПРИМЕР СТРУКТУРЫ JSON (значения type и level всегда ставь равными запрошенным):
 {
@@ -104,22 +147,24 @@
     {
       "type": "truth",
       "level": 2,
-      "topic": "продажа друзей за миллион",
+      "topic": "<2-4 слова сути>",
+      "title": "",
       "needs_target": true,
       "timer_sec": 0,
-      "roast": "Ну давай, святоша, посмотрим, сколько на самом деле стоит ваша дружба.",
-      "task": "Назови минимальную сумму, за которую ты без раздумий сольешь главный секрет выбранной цели её начальству.",
-      "bs_penalty": "Слишком дешево отмазываешься. За 20 секунд без пауз объясни всем, почему цель этого реально заслуживает.",
+      "roast": "<едкая подводка до 110 символов>",
+      "task": "<простое четкое задание по своей теме до 220 символов>",
+      "bs_penalty": "<добивание для truth до 150 символов или пустая строка>",
       "bs_timer_sec": 20
     },
     {
       "type": "dare",
       "level": 2,
-      "topic": "эпитафия для цели",
+      "topic": "<2-4 слова сути>",
+      "title": "",
       "needs_target": true,
       "timer_sec": 30,
-      "roast": "Откашляйся, сейчас проверим твои таланты траурного оратора.",
-      "task": "30 секунд с максимально скорбным лицом произноси пафосную речь на похоронах выбранной цели, упомянув её самую нелепую привычку.",
+      "roast": "<едкая подводка до 110 символов>",
+      "task": "<простое четкое действие по своей теме до 220 символов>",
       "bs_penalty": "",
       "bs_timer_sec": 0
     }
@@ -221,6 +266,8 @@
     gameKeyDot: byId('gameKeyDot'),
     menuBtn: byId('menuBtn'),
     groupBtn: byId('groupBtn'),
+    paranoiaBtn: byId('paranoiaBtn'),
+    curseBtn: byId('curseBtn'),
     currentPlayerLabel: byId('currentPlayerLabel'),
     roundLabel: byId('roundLabel'),
     levelCaption: byId('levelCaption'),
@@ -241,14 +288,65 @@
     cardLevelLabel: byId('cardLevelLabel'),
     cardContent: byId('cardContent'),
     cardCloseBtn: byId('cardCloseBtn'),
+    takeCurseBtn: byId('takeCurseBtn'),
     anotherCardBtn: byId('anotherCardBtn'),
     doneTurnBtn: byId('doneTurnBtn'),
+
+    curseBar: byId('curseBar'),
+    curseChips: byId('curseChips'),
 
     groupOverlay: byId('groupOverlay'),
     groupContent: byId('groupContent'),
     groupLevelLabel: byId('groupLevelLabel'),
     groupAnotherBtn: byId('groupAnotherBtn'),
     groupEndBtn: byId('groupEndBtn'),
+
+    paranoiaOverlay: byId('paranoiaOverlay'),
+    paranoiaMain: byId('paranoiaMain'),
+    paranoiaLevelLabel: byId('paranoiaLevelLabel'),
+    paranoiaPlayer: byId('paranoiaPlayer'),
+    paranoiaRoast: byId('paranoiaRoast'),
+    paranoiaQuestionZone: byId('paranoiaQuestionZone'),
+    paranoiaQuestionHint: byId('paranoiaQuestionHint'),
+    paranoiaQuestionText: byId('paranoiaQuestionText'),
+    paranoiaCoinStage: byId('paranoiaCoinStage'),
+    paranoiaCoin: byId('paranoiaCoin'),
+    paranoiaCoinLabel: byId('paranoiaCoinLabel'),
+    paranoiaAnotherBtn: byId('paranoiaAnotherBtn'),
+    paranoiaCoinBtn: byId('paranoiaCoinBtn'),
+    paranoiaResult: byId('paranoiaResult'),
+    paranoiaResultIcon: byId('paranoiaResultIcon'),
+    paranoiaResultKicker: byId('paranoiaResultKicker'),
+    paranoiaResultTitle: byId('paranoiaResultTitle'),
+    paranoiaResultText: byId('paranoiaResultText'),
+    paranoiaNextBtn: byId('paranoiaNextBtn'),
+
+    curseOverlay: byId('curseOverlay'),
+    curseOverlayTitle: byId('curseOverlayTitle'),
+    curseLevelLabel: byId('curseLevelLabel'),
+    curseOverlayPlayer: byId('curseOverlayPlayer'),
+    curseOverlayRoast: byId('curseOverlayRoast'),
+    curseOverlayRule: byId('curseOverlayRule'),
+    curseOverlayPenalty: byId('curseOverlayPenalty'),
+    curseOverlayTimerInfo: byId('curseOverlayTimerInfo'),
+    curseOverlayCloseBtn: byId('curseOverlayCloseBtn'),
+
+    curseDetailOverlay: byId('curseDetailOverlay'),
+    curseDetailTitle: byId('curseDetailTitle'),
+    curseDetailCloseBtn: byId('curseDetailCloseBtn'),
+    curseDetailPlayer: byId('curseDetailPlayer'),
+    curseDetailRule: byId('curseDetailRule'),
+    curseDetailTurns: byId('curseDetailTurns'),
+    cursePenaltyBtn: byId('cursePenaltyBtn'),
+    cursePenaltyBlock: byId('cursePenaltyBlock'),
+    cursePenaltyText: byId('cursePenaltyText'),
+    curseFailTimer: byId('curseFailTimer'),
+    curseFailStatus: byId('curseFailStatus'),
+    curseFailDigits: byId('curseFailDigits'),
+    curseFailFill: byId('curseFailFill'),
+    curseFailToggle: byId('curseFailToggle'),
+    curseFailReset: byId('curseFailReset'),
+    curseRemoveBtn: byId('curseRemoveBtn'),
 
     settingsOverlay: byId('settingsOverlay'),
     settingsCloseBtn: byId('settingsCloseBtn'),
@@ -258,6 +356,11 @@
     noRememberKey: byId('noRememberKey'),
     saveKeyBtn: byId('saveKeyBtn'),
     clearKeyBtn: byId('clearKeyBtn'),
+    themeMemoryCount: byId('themeMemoryCount'),
+    resetThemeMemoryBtn: byId('resetThemeMemoryBtn'),
+    themeMemoryConfirm: byId('themeMemoryConfirm'),
+    cancelThemeMemoryBtn: byId('cancelThemeMemoryBtn'),
+    confirmThemeMemoryBtn: byId('confirmThemeMemoryBtn'),
 
     loaderOverlay: byId('loaderOverlay'),
     loaderKicker: byId('loaderKicker'),
@@ -299,15 +402,24 @@
 
   let generationId = 0;
   let buffers = Object.create(null);
-  let usedTopics = { truth: [], dare: [], group: [] };
+  let usedTopics = { truth: [], dare: [], group: [], paranoia: [], curse: [] };
+  let themeDeck = [];
 
   const inFlightRequests = Object.create(null);
+
+  let activeCurses = [];
+  let activeParanoia = null;
+  let paranoiaTossTimer = null;
+  let curseFailTimer = null;
+  let curseDetailPlayerId = null;
 
   const ui = {
     screen: 'lobby',
     card: null,
     groupCard: null,
     processing: false,
+    paranoiaBusy: false,
+    curseContext: null,
     loaderOpen: false,
     loaderKey: null,
     errorAction: null,
@@ -429,6 +541,111 @@
     return items[Math.floor(Math.random() * items.length)];
   }
 
+  function createEmptyUsedTopics() {
+    return { truth: [], dare: [], group: [], paranoia: [], curse: [] };
+  }
+
+  function saveUsedTopics() {
+    writeStorage(
+      window.localStorage,
+      STORAGE_KEYS.usedTopics,
+      JSON.stringify(usedTopics)
+    );
+  }
+
+  function saveThemeDeck() {
+    writeStorage(
+      window.localStorage,
+      STORAGE_KEYS.themeDeck,
+      JSON.stringify(themeDeck)
+    );
+  }
+
+  function shuffleThemeIndices() {
+    const indices = LIFE_THEMES.map((theme, index) => index);
+    for (let index = indices.length - 1; index > 0; index -= 1) {
+      const randomIndex = Math.floor(Math.random() * (index + 1));
+      [indices[index], indices[randomIndex]] = [indices[randomIndex], indices[index]];
+    }
+    return indices;
+  }
+
+  function sanitizeThemeDeck(value) {
+    if (!Array.isArray(value)) return null;
+
+    const seen = new Set();
+    return value.filter((item) => {
+      const index = Number(item);
+      if (!Number.isInteger(index) || index < 0 || index >= LIFE_THEMES.length || seen.has(index)) {
+        return false;
+      }
+      seen.add(index);
+      return true;
+    }).map((item) => Number(item));
+  }
+
+  function loadThemeMemory() {
+    const rawUsedTopics = readStorage(window.localStorage, STORAGE_KEYS.usedTopics);
+    if (rawUsedTopics) {
+      try {
+        const parsed = JSON.parse(rawUsedTopics);
+        const nextTopics = createEmptyUsedTopics();
+        Object.keys(nextTopics).forEach((type) => {
+          if (!parsed || !Array.isArray(parsed[type])) return;
+          nextTopics[type] = parsed[type]
+            .map((topic) => cleanString(topic))
+            .filter(Boolean)
+            .slice(-50);
+        });
+        usedTopics = nextTopics;
+      } catch (error) {
+        usedTopics = createEmptyUsedTopics();
+      }
+    }
+    saveUsedTopics();
+
+    const rawDeck = readStorage(window.localStorage, STORAGE_KEYS.themeDeck);
+    if (rawDeck) {
+      try {
+        const parsedDeck = sanitizeThemeDeck(JSON.parse(rawDeck));
+        themeDeck = parsedDeck || shuffleThemeIndices();
+      } catch (error) {
+        themeDeck = shuffleThemeIndices();
+      }
+    } else {
+      themeDeck = shuffleThemeIndices();
+    }
+    saveThemeDeck();
+  }
+
+  function totalRememberedThemes() {
+    return Object.values(usedTopics).reduce((total, topics) => {
+      return total + (Array.isArray(topics) ? topics.length : 0);
+    }, 0);
+  }
+
+  function drawLifeThemes(count) {
+    const target = Math.max(0, Math.min(LIFE_THEMES.length, Number(count) || 0));
+    const selected = [];
+    let guard = 0;
+
+    while (selected.length < target && guard < 1000) {
+      guard += 1;
+      if (!themeDeck.length) {
+        themeDeck = shuffleThemeIndices();
+      }
+
+      const index = themeDeck.pop();
+      if (!Number.isInteger(index) || index < 0 || index >= LIFE_THEMES.length) continue;
+
+      const theme = LIFE_THEMES[index];
+      if (!selected.includes(theme)) selected.push(theme);
+    }
+
+    saveThemeDeck();
+    return selected;
+  }
+
   /* ---------------------------------------------------------
      Ошибки API
      --------------------------------------------------------- */
@@ -548,6 +765,8 @@
       apiKey = '';
       keyInSession = false;
     }
+
+    loadThemeMemory();
   }
 
   function savePlayers() {
@@ -632,30 +851,51 @@
       .replace('{{VIBE_BLOCK}}', vibeText);
   }
 
-  function buildUserPrompt(type, level, count) {
+  function buildThemeDirectionsBlock(themes) {
+    if (!themes.length) return '';
+    const lines = themes.map((theme, index) => `${index + 1}. ${theme}`);
+    return [
+      'Направления тем для этой пачки (каждая карточка — про свою сферу жизни, просто и без замудренных сценариев):',
+      ...lines
+    ].join('\n');
+  }
+
+  function buildUserPrompt(type, level, count, lifeThemes = []) {
     const topics = usedTopics[type]
-      .slice(-20)
+      .slice(-25)
       .map((topic) => scrubPlayerNames(topic))
       .filter(Boolean);
     const topicList = topics.length ? topics.join(', ') : 'пока нет';
+    const usedBlock = `Уже использованные темы (не повторяй): ${topicList}.`;
+    const themeBlock = buildThemeDirectionsBlock(lifeThemes);
+    const suffix = [themeBlock, usedBlock].filter(Boolean).join('\n\n');
 
     if (type === 'group') {
-      return `Сгенерируй ровно ${count} абсолютно разных заданий для всей компании сразу. Тип: group. Уровень градуса: ${level}. Везде ставь \`needs_target: false\`, \`bs_penalty: ""\` и \`bs_timer_sec: 0\`. Добавляй \`timer_sec\` целым числом от 15 до 60 там, где нужно время на оправдание, спор или голосование, и упомяни это время в \`task\`. Все карточки должны отличаться механикой. Соблюдай лимиты длины полей и гендерную нейтральность. Уже использованные темы (не повторяй): ${topicList}.`;
+      return `Сгенерируй ровно ${count} абсолютно разных заданий для всей компании сразу. Тип: group. Уровень градуса: ${level}. Везде ставь \`needs_target: false\`, \`bs_penalty: ""\` и \`bs_timer_sec: 0\`. Добавляй \`timer_sec\` целым числом от 15 до 60 там, где нужно время на оправдание, спор или голосование, и упомяни это время в \`task\`. Все карточки должны отличаться механикой. Соблюдай лимиты длины полей и гендерную нейтральность.\n\n${suffix}`;
     }
 
-    return `Сгенерируй ровно ${count} абсолютно разных заданий. Тип: ${type}. Уровень градуса: ${level}. Примерно в половине карточек сделай \`needs_target: true\`, в остальных \`false\`. Где уместно (особенно в действиях), добавь \`timer_sec\` целым числом от 15 до 60 и упомяни это время в \`task\`. Для \`truth\` обязательно заполни яркое \`bs_penalty\` (и \`bs_timer_sec\` от 15 до 30, если добивание на время). Все карточки в пачке должны отличаться механикой и темой. Соблюдай лимиты длины полей и гендерную нейтральность. Уже использованные темы (не повторяй их и не делай похожие): ${topicList}.`;
+    if (type === 'paranoia') {
+      return `Сгенерируй ровно ${count} абсолютно разных острых вопросов для режима «Паранойя». Тип: paranoia. Уровень градуса: ${level}. Каждый вопрос должен требовать выбрать одного человека из комнаты («Кто из присутствующих...», «Кого в этой комнате...»). Везде ставь \`needs_target: false\`, \`timer_sec: 0\`, \`bs_penalty: ""\`, \`bs_timer_sec: 0\`, \`title: ""\`. Соблюдай лимиты длины и гендерную нейтральность.\n\n${suffix}`;
+    }
+
+    if (type === 'curse') {
+      return `Сгенерируй ровно ${count} абсолютно разных смешных «Липких проклятий» на 2 круга. Тип: curse. Уровень градуса: ${level}. Строго БЕЗ реквизита, телефона и касаний — только речь, мимика, интонации и реакции во время чужих ходов. Заполни короткое \`title\` (до 30 символов), правило в \`task\` (до 200 символов), жесткий мгновенный штраф за нарушение в \`bs_penalty\` (до 150 символов) и \`bs_timer_sec\` (15–30 или 0). Везде ставь \`needs_target: false\` и \`timer_sec: 0\`. Соблюдай гендерную нейтральность.\n\n${usedBlock}`;
+    }
+
+    return `Сгенерируй ровно ${count} абсолютно разных заданий. Тип: ${type}. Уровень градуса: ${level}. Примерно в половине карточек сделай \`needs_target: true\`, в остальных \`false\`. Где уместно (особенно в действиях), добавь \`timer_sec\` целым числом от 15 до 60 и упомяни это время в \`task\`. Для \`truth\` обязательно заполни яркое \`bs_penalty\` (и \`bs_timer_sec\` от 15 до 30, если добивание на время). Все карточки в пачке должны отличаться механикой и темой. Соблюдай лимиты длины полей и гендерную нейтральность.\n\n${suffix}`;
   }
 
-  function buildRequestBody(type, level, count) {
+  function buildRequestBody(type, level, count, lifeThemes = []) {
     return {
       model: API_MODEL,
       thinking: { type: 'disabled' },
       temperature: 1.2,
+      presence_penalty: 0.3,
       max_tokens: 4096,
       response_format: { type: 'json_object' },
       messages: [
         { role: 'system', content: buildSystemPrompt() },
-        { role: 'user', content: buildUserPrompt(type, level, count) }
+        { role: 'user', content: buildUserPrompt(type, level, count, lifeThemes) }
       ]
     };
   }
@@ -781,6 +1021,12 @@
     const removed = players[index];
     const wasCurrent = removed.id === currentPlayerId;
     players.splice(index, 1);
+
+    if (activeCurses.some((curse) => curse.playerId === id)) {
+      activeCurses = activeCurses.filter((curse) => curse.playerId !== id);
+      if (curseDetailPlayerId === id) closeCurseDetail();
+      renderCurseBar();
+    }
 
     if (ui.card && ui.card.targetId === id) {
       ui.card.targetId = null;
@@ -948,10 +1194,11 @@
     el.lobbyScreen.hidden = true;
     el.gameScreen.hidden = false;
     updateGameHeader();
+    renderCurseBar();
   }
 
   function openLobby() {
-    if (ui.screen === 'lobby') return;
+    if (ui.screen === 'lobby' || specialOverlayOpen()) return;
     stopAllTimers();
     showLobbyScreen();
   }
@@ -983,7 +1230,6 @@
     generationId += 1;
     abortAllInFlight();
     buffers = Object.create(null);
-    usedTopics = { truth: [], dare: [], group: [] };
 
     stopAllTimers();
     hideLoader();
@@ -991,6 +1237,7 @@
     closeEndGameConfirm({ restoreFocus: false });
     closeSettings({ skipTimerRestore: true });
     closeGroupOverlay({ skipChoose: true });
+    resetSpecialMechanics();
     ui.card = null;
     hideCardOverlay();
     ui.processing = false;
@@ -1066,7 +1313,6 @@
     generationId += 1;
     abortAllInFlight();
     buffers = Object.create(null);
-    usedTopics = { truth: [], dare: [], group: [] };
 
     game.isPlaying = false;
     game.round = 1;
@@ -1080,6 +1326,7 @@
     hideError();
     closeSettings({ skipTimerRestore: true });
     closeGroupOverlay({ skipChoose: true });
+    resetSpecialMechanics();
     ui.card = null;
     hideCardOverlay();
     ui.processing = false;
@@ -1222,13 +1469,16 @@
     }, API_TIMEOUT_MS);
 
     try {
+      const lifeThemes = THEME_TYPES.has(entry.type)
+        ? drawLifeThemes(requestedCount)
+        : [];
       const response = await fetch(API_ENDPOINT, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${apiKey}`
         },
-        body: JSON.stringify(buildRequestBody(entry.type, entry.level, requestedCount)),
+        body: JSON.stringify(buildRequestBody(entry.type, entry.level, requestedCount, lifeThemes)),
         signal: controller.signal,
         cache: 'no-store'
       });
@@ -1295,20 +1545,31 @@
     return String(value == null ? '' : value).trim();
   }
 
+  function truncateCharacters(value, limit) {
+    return Array.from(cleanString(value)).slice(0, limit).join('');
+  }
+
   function normalizeCard(rawCard, type, level) {
     if (!rawCard || typeof rawCard !== 'object' || Array.isArray(rawCard)) return null;
     const task = cleanString(rawCard.task);
     if (!task) return null;
 
+    const title = type === 'curse'
+      ? (truncateCharacters(rawCard.title, 30) || CURSE_FALLBACK_TITLE)
+      : '';
+
     let topic = cleanString(rawCard.topic);
-    if (!topic) topic = task.slice(0, 64);
+    if (!topic) topic = type === 'curse' ? title : task.slice(0, 64);
 
     const card = {
       type,
       level,
       topic,
-      needs_target: type === 'group' ? false : toBoolean(rawCard.needs_target),
-      timer_sec: toNonNegativeInt(rawCard.timer_sec),
+      title,
+      needs_target: type === 'group' || type === 'paranoia' || type === 'curse'
+        ? false
+        : toBoolean(rawCard.needs_target),
+      timer_sec: type === 'paranoia' || type === 'curse' ? 0 : toNonNegativeInt(rawCard.timer_sec),
       roast: cleanString(rawCard.roast),
       task,
       bs_penalty: '',
@@ -1318,6 +1579,23 @@
     if (type === 'truth') {
       card.bs_penalty = cleanString(rawCard.bs_penalty);
       card.bs_timer_sec = card.bs_penalty ? toNonNegativeInt(rawCard.bs_timer_sec) : 0;
+    }
+
+    if (type === 'paranoia') {
+      card.needs_target = false;
+      card.timer_sec = 0;
+      card.bs_penalty = '';
+      card.bs_timer_sec = 0;
+      card.title = '';
+    }
+
+    if (type === 'curse') {
+      const penaltySeconds = toNonNegativeInt(rawCard.bs_timer_sec);
+      card.needs_target = false;
+      card.timer_sec = 0;
+      card.title = truncateCharacters(rawCard.title, 30) || CURSE_FALLBACK_TITLE;
+      card.bs_penalty = cleanString(rawCard.bs_penalty) || CURSE_FALLBACK_PENALTY;
+      card.bs_timer_sec = penaltySeconds >= 15 && penaltySeconds <= 30 ? penaltySeconds : 0;
     }
 
     return card;
@@ -1351,7 +1629,9 @@
       topics.push(card.topic);
     });
 
+    usedTopics[entry.type] = topics.slice(-50);
     buffers[key] = queue;
+    saveUsedTopics();
   }
 
   async function fetchBatchWithRetry(entry) {
@@ -1513,12 +1793,15 @@
   function showLoader(entryKey, type) {
     ui.loaderOpen = true;
     ui.loaderKey = entryKey || null;
+    const loaderTitles = {
+      truth: 'Ищем, что у тебя болит',
+      dare: 'Придумываем неловкость',
+      group: 'Собираем всех в замес',
+      paranoia: 'Прячем вопрос от лишних глаз',
+      curse: 'Накладываем липкое проклятие'
+    };
     el.loaderKicker.textContent = 'Ведущий уже в ударе';
-    el.loaderTitle.textContent = type === 'truth'
-      ? 'Ищем, что у тебя болит'
-      : type === 'dare'
-        ? 'Придумываем неловкость'
-        : 'Собираем всех в замес';
+    el.loaderTitle.textContent = loaderTitles[type] || 'Придумываем дичь';
     el.loaderHint.textContent = 'Обычно это занимает несколько секунд. Если ведущий задумался — можно отменить.';
     el.loaderOverlay.classList.remove('hidden');
     el.loaderOverlay.setAttribute('aria-hidden', 'false');
@@ -1696,10 +1979,12 @@
 
     el.cardContent.innerHTML = cardMarkup(card);
     el.cardContent.scrollTop = 0;
+    el.takeCurseBtn.hidden = card.type !== 'truth' && card.type !== 'dare';
     el.cardOverlay.classList.remove('hidden');
     el.cardOverlay.setAttribute('aria-hidden', 'false');
     el.doneTurnBtn.disabled = false;
     el.anotherCardBtn.disabled = false;
+    el.takeCurseBtn.disabled = false;
     setupTimers(el.cardContent, card);
 
     if (!options.preserveOverlay) {
@@ -1822,13 +2107,16 @@
   }
 
   async function completeTurn() {
-    if (ui.processing || !ui.card) return;
+    if (ui.processing || !ui.card || !game.isPlaying) return;
     ui.processing = true;
 
     try {
       stopAllTimers();
+      const actingPlayer = currentPlayer();
       ui.card = null;
       hideCardOverlay();
+
+      if (actingPlayer) tickCursesForPlayer(actingPlayer.id);
 
       game.completedTurns += 1;
 
@@ -1844,6 +2132,8 @@
 
       if (game.completedTurns > 0 && game.completedTurns % 5 === 0) {
         await openGroupForTurn();
+      } else if (players.length >= 3 && game.completedTurns > 0 && game.completedTurns % 5 === 3) {
+        await openParanoiaForTurn();
       }
     } finally {
       ui.processing = false;
@@ -2097,6 +2387,18 @@
       if (timer.raf) cancelAnimationFrame(timer.raf);
       timer.raf = requestAnimationFrame(() => timerTick(timer));
     });
+
+    if (curseFailTimer && curseFailTimer.running) {
+      const left = curseFailTimer.deadline - Date.now();
+      if (left <= 0) {
+        finishCurseFailTimer();
+      } else {
+        curseFailTimer.remainingMs = left;
+        updateCurseFailTimerUI();
+        if (curseFailTimer.raf) cancelAnimationFrame(curseFailTimer.raf);
+        curseFailTimer.raf = requestAnimationFrame(tickCurseFailTimer);
+      }
+    }
   }
 
   /* ---------------------------------------------------------
@@ -2169,8 +2471,7 @@
   }
 
   async function openGroupManual() {
-    if (ui.processing) return;
-    if (!el.groupOverlay.classList.contains('hidden')) return;
+    if (ui.processing || specialOverlayOpen()) return;
     if (!game.isPlaying) return;
 
     ui.processing = true;
@@ -2206,6 +2507,764 @@
   }
 
   /* ---------------------------------------------------------
+     Специальные карточки: Паранойя и проклятия
+     --------------------------------------------------------- */
+
+  function specialOverlayOpen() {
+    return !el.groupOverlay.classList.contains('hidden')
+      || !el.paranoiaOverlay.classList.contains('hidden')
+      || !el.curseOverlay.classList.contains('hidden')
+      || !el.curseDetailOverlay.classList.contains('hidden');
+  }
+
+  async function fetchSpecialCard(type) {
+    const level = getCurrentLevel();
+    const key = cardBufferKey(type, level);
+    const needsLoader = (buffers[key] || []).length === 0;
+    if (needsLoader) showLoader(key, type);
+
+    try {
+      const card = await pullCard(type, level);
+      if (needsLoader) hideLoader();
+      return { card, level };
+    } catch (error) {
+      if (needsLoader) hideLoader();
+      throw error;
+    }
+  }
+
+  function playerById(playerId) {
+    return players.find((player) => player.id === playerId) || null;
+  }
+
+  function curseForPlayer(playerId) {
+    return activeCurses.find((curse) => curse.playerId === playerId) || null;
+  }
+
+  function renderCurseBar() {
+    el.curseChips.innerHTML = '';
+
+    if (!game.isPlaying || activeCurses.length === 0) {
+      el.curseBar.classList.add('hidden');
+      return;
+    }
+
+    activeCurses.forEach((curse) => {
+      const player = playerById(curse.playerId);
+      if (!player) return;
+
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'curse-chip';
+      chip.dataset.cursePlayer = curse.playerId;
+      chip.textContent = `☠️ ${player.name}: ${curse.title} (${curse.turnsLeft})`;
+      chip.title = curse.rule;
+      el.curseChips.appendChild(chip);
+    });
+
+    el.curseBar.classList.toggle('hidden', el.curseChips.children.length === 0);
+  }
+
+  function applyCurseToPlayer(playerId, card) {
+    const player = playerById(playerId);
+    if (!player) return false;
+
+    activeCurses = activeCurses.filter((curse) => curse.playerId !== playerId);
+    while (activeCurses.length >= 3) activeCurses.shift();
+
+    activeCurses.push({
+      playerId,
+      title: truncateCharacters(card.title, 30) || CURSE_FALLBACK_TITLE,
+      rule: cleanString(card.task) || 'Соблюдай правило проклятия и не попадайся.',
+      failPenalty: cleanString(card.bs_penalty) || CURSE_FALLBACK_PENALTY,
+      failTimerSec: card.bs_timer_sec >= 15 && card.bs_timer_sec <= 30 ? card.bs_timer_sec : 0,
+      turnsLeft: 2
+    });
+
+    renderCurseBar();
+    return true;
+  }
+
+  function tickCursesForPlayer(playerId) {
+    if (!playerId) return;
+    const player = playerById(playerId);
+    const expired = [];
+
+    activeCurses = activeCurses.filter((curse) => {
+      if (curse.playerId !== playerId) return true;
+      curse.turnsLeft -= 1;
+      if (curse.turnsLeft <= 0) {
+        expired.push(curse);
+        return false;
+      }
+      return true;
+    });
+
+    renderCurseBar();
+
+    if (curseDetailPlayerId === playerId) {
+      if (curseForPlayer(playerId)) {
+        refreshCurseDetail();
+      } else {
+        closeCurseDetail();
+      }
+    }
+
+    expired.forEach(() => {
+      showToast(`✨ Проклятие с ${player ? player.name : 'игрока'} снято!`);
+    });
+  }
+
+  function removeCurseForPlayer(playerId, options = {}) {
+    const removed = curseForPlayer(playerId);
+    if (!removed) return false;
+
+    activeCurses = activeCurses.filter((curse) => curse.playerId !== playerId);
+    renderCurseBar();
+
+    if (curseDetailPlayerId === playerId) closeCurseDetail();
+    if (options.toast) showToast('Проклятие снято досрочно.');
+    return true;
+  }
+
+  function resetSpecialMechanics() {
+    if (paranoiaTossTimer) {
+      window.clearTimeout(paranoiaTossTimer);
+      paranoiaTossTimer = null;
+    }
+    activeParanoia = null;
+    el.paranoiaOverlay.classList.add('hidden');
+    el.paranoiaOverlay.setAttribute('aria-hidden', 'true');
+    el.paranoiaOverlay.classList.remove('is-flashing');
+    el.paranoiaMain.classList.remove('hidden');
+    el.paranoiaResult.classList.add('hidden');
+    el.paranoiaQuestionZone.classList.remove('is-revealed', 'is-burning');
+    el.paranoiaCoin.classList.remove('is-tossing');
+    ui.paranoiaBusy = false;
+
+    ui.curseContext = null;
+    el.curseOverlay.classList.add('hidden');
+    el.curseOverlay.setAttribute('aria-hidden', 'true');
+
+    stopCurseFailTimer();
+    curseDetailPlayerId = null;
+    el.curseDetailOverlay.classList.add('hidden');
+    el.curseDetailOverlay.setAttribute('aria-hidden', 'true');
+
+    activeCurses = [];
+    renderCurseBar();
+  }
+
+  /* ---------------------------------------------------------
+     Курс: оверлей карточки проклятия
+     --------------------------------------------------------- */
+
+  function openCurseOverlay(card, mode, playerId) {
+    const player = playerById(playerId);
+    if (!player) return;
+
+    stopAllTimers();
+    if (!applyCurseToPlayer(playerId, card)) return;
+
+    ui.curseContext = { mode, playerId };
+    el.curseOverlayTitle.textContent = card.title || CURSE_FALLBACK_TITLE;
+    el.curseLevelLabel.textContent = `Уровень ${card.level}`;
+    el.curseOverlayPlayer.textContent = player.name;
+    el.curseOverlayRoast.textContent = card.roast || '';
+    el.curseOverlayRule.textContent = card.task;
+    el.curseOverlayPenalty.textContent = card.bs_penalty || CURSE_FALLBACK_PENALTY;
+    el.curseOverlayTimerInfo.textContent = card.bs_timer_sec
+      ? `Если поймают: штраф на ${card.bs_timer_sec} секунд.`
+      : 'Если поймают: штраф без таймера.';
+    el.curseOverlayCloseBtn.textContent = mode === 'merge'
+      ? 'Принял проклятие — следующий ход'
+      : 'Понял, продолжить';
+    el.curseOverlay.classList.remove('hidden');
+    el.curseOverlay.setAttribute('aria-hidden', 'false');
+    window.setTimeout(() => el.curseOverlayCloseBtn.focus({ preventScroll: true }), 30);
+  }
+
+  async function openCurseManual() {
+    if (!game.isPlaying || ui.processing || specialOverlayOpen()) return;
+    if (!currentPlayer()) return;
+
+    ui.processing = true;
+    stopAllTimers();
+
+    try {
+      const { card } = await fetchSpecialCard('curse');
+      const playerId = currentPlayerId;
+      if (!playerId) return;
+      openCurseOverlay(card, 'manual', playerId);
+    } catch (error) {
+      if (isIgnorableError(error)) {
+        restoreActiveTimerUI();
+      } else {
+        showApiError(error, () => openCurseManual());
+      }
+    } finally {
+      ui.processing = false;
+    }
+  }
+
+  async function openCurseMerge() {
+    if (!game.isPlaying || ui.processing || specialOverlayOpen()) return;
+    if (!ui.card || (ui.card.type !== 'truth' && ui.card.type !== 'dare')) return;
+
+    ui.processing = true;
+    stopAllTimers();
+
+    try {
+      const { card } = await fetchSpecialCard('curse');
+      const playerId = currentPlayerId;
+      if (!playerId) return;
+      openCurseOverlay(card, 'merge', playerId);
+    } catch (error) {
+      if (isIgnorableError(error)) {
+        restoreActiveTimerUI();
+      } else {
+        showApiError(error, () => openCurseMerge());
+      }
+    } finally {
+      ui.processing = false;
+    }
+  }
+
+  function closeCurseOverlayAndContinue() {
+    const context = ui.curseContext;
+    if (!context) return;
+
+    el.curseOverlay.classList.add('hidden');
+    el.curseOverlay.setAttribute('aria-hidden', 'true');
+    ui.curseContext = null;
+
+    if (context.mode === 'merge') {
+      if (ui.card) {
+        completeTurn().catch(() => {});
+      } else {
+        showChooseScreen();
+      }
+      return;
+    }
+
+    if (ui.card) {
+      renderNormalCard(ui.card, { preserveOverlay: true });
+    } else {
+      ui.card = null;
+      hideCardOverlay();
+      showChooseScreen();
+    }
+    updateGameHeader();
+    renderCurseBar();
+  }
+
+  /* ---------------------------------------------------------
+     Курс: модалка активного проклятия
+     --------------------------------------------------------- */
+
+  function updateCurseFailTimerUI() {
+    if (!curseFailTimer) return;
+    const remaining = Math.max(0, curseFailTimer.remainingMs);
+    el.curseFailDigits.textContent = formatTime(remaining);
+    el.curseFailFill.style.width = `${Math.max(0, Math.min(100, (remaining / curseFailTimer.totalMs) * 100))}%`;
+    el.curseFailTimer.classList.toggle('is-running', curseFailTimer.running);
+    el.curseFailTimer.classList.toggle('is-finished', curseFailTimer.done);
+
+    if (curseFailTimer.done) {
+      el.curseFailStatus.textContent = 'время вышло';
+      el.curseFailToggle.textContent = 'Заново';
+    } else if (curseFailTimer.running) {
+      el.curseFailStatus.textContent = 'идёт';
+      el.curseFailToggle.textContent = 'Пауза';
+    } else if (curseFailTimer.remainingMs < curseFailTimer.totalMs) {
+      el.curseFailStatus.textContent = 'пауза';
+      el.curseFailToggle.textContent = 'Продолжить';
+    } else {
+      el.curseFailStatus.textContent = 'готов';
+      el.curseFailToggle.textContent = 'Старт';
+    }
+  }
+
+  function stopCurseFailTimer() {
+    if (curseFailTimer && curseFailTimer.raf) cancelAnimationFrame(curseFailTimer.raf);
+    curseFailTimer = null;
+    el.curseFailTimer.classList.add('hidden');
+    el.curseFailTimer.classList.remove('is-running', 'is-finished', 'timer-flash');
+  }
+
+  function setupCurseFailTimer(seconds) {
+    stopCurseFailTimer();
+    if (!seconds) return;
+
+    const totalMs = Math.max(1, Number(seconds) * 1000);
+    curseFailTimer = {
+      totalMs,
+      remainingMs: totalMs,
+      deadline: 0,
+      running: false,
+      done: false,
+      raf: 0
+    };
+    el.curseFailTimer.classList.remove('hidden', 'is-finished');
+    el.curseFailDigits.textContent = formatTime(totalMs);
+    el.curseFailFill.style.width = '100%';
+    el.curseFailStatus.textContent = 'готов';
+    el.curseFailToggle.textContent = 'Старт';
+    updateCurseFailTimerUI();
+  }
+
+  function finishCurseFailTimer() {
+    if (!curseFailTimer || curseFailTimer.done) return;
+    curseFailTimer.remainingMs = 0;
+    curseFailTimer.running = false;
+    curseFailTimer.done = true;
+    if (curseFailTimer.raf) {
+      cancelAnimationFrame(curseFailTimer.raf);
+      curseFailTimer.raf = 0;
+    }
+    updateCurseFailTimerUI();
+    const box = el.curseDetailOverlay.querySelector('.curse-detail-box');
+    if (box) {
+      box.classList.remove('timer-flash');
+      void box.offsetWidth;
+      box.classList.add('timer-flash');
+      window.setTimeout(() => box.classList.remove('timer-flash'), 650);
+    }
+    vibrateFinish();
+    playDoubleBeep();
+  }
+
+  function tickCurseFailTimer() {
+    if (!curseFailTimer || !curseFailTimer.running) return;
+    const left = curseFailTimer.deadline - Date.now();
+    curseFailTimer.remainingMs = Math.max(0, left);
+    updateCurseFailTimerUI();
+    if (left <= 0) {
+      finishCurseFailTimer();
+      return;
+    }
+    curseFailTimer.raf = requestAnimationFrame(tickCurseFailTimer);
+  }
+
+  function toggleCurseFailTimer() {
+    if (!curseFailTimer) return;
+    ensureAudio();
+
+    if (curseFailTimer.running) {
+      curseFailTimer.remainingMs = Math.max(0, curseFailTimer.deadline - Date.now());
+      curseFailTimer.running = false;
+      if (curseFailTimer.raf) cancelAnimationFrame(curseFailTimer.raf);
+      curseFailTimer.raf = 0;
+      updateCurseFailTimerUI();
+      return;
+    }
+
+    if (curseFailTimer.done || curseFailTimer.remainingMs <= 0) {
+      curseFailTimer.remainingMs = curseFailTimer.totalMs;
+      curseFailTimer.done = false;
+    }
+
+    curseFailTimer.deadline = Date.now() + curseFailTimer.remainingMs;
+    curseFailTimer.running = true;
+    el.curseFailTimer.classList.remove('is-finished');
+    updateCurseFailTimerUI();
+    tickCurseFailTimer();
+  }
+
+  function resetCurseFailTimerState() {
+    if (!curseFailTimer) return;
+    if (curseFailTimer.raf) cancelAnimationFrame(curseFailTimer.raf);
+    curseFailTimer.raf = 0;
+    curseFailTimer.running = false;
+    curseFailTimer.done = false;
+    curseFailTimer.remainingMs = curseFailTimer.totalMs;
+    curseFailTimer.deadline = 0;
+    el.curseFailTimer.classList.remove('is-finished');
+    updateCurseFailTimerUI();
+  }
+
+  function refreshCurseDetail() {
+    if (!curseDetailPlayerId) return;
+    const curse = curseForPlayer(curseDetailPlayerId);
+    if (!curse) {
+      closeCurseDetail();
+      return;
+    }
+    const player = playerById(curse.playerId);
+    el.curseDetailTitle.textContent = curse.title;
+    el.curseDetailPlayer.textContent = player ? player.name : 'Игрок';
+    el.curseDetailRule.textContent = curse.rule;
+    el.curseDetailTurns.textContent = String(curse.turnsLeft);
+  }
+
+  function openCurseDetail(playerId) {
+    const curse = curseForPlayer(playerId);
+    if (!curse) return;
+
+    stopCurseFailTimer();
+    curseDetailPlayerId = playerId;
+    refreshCurseDetail();
+    el.cursePenaltyBlock.classList.add('hidden');
+    el.cursePenaltyBtn.hidden = false;
+    el.cursePenaltyText.textContent = '';
+    el.curseDetailOverlay.classList.remove('hidden');
+    el.curseDetailOverlay.setAttribute('aria-hidden', 'false');
+    window.setTimeout(() => el.curseDetailCloseBtn.focus({ preventScroll: true }), 30);
+  }
+
+  function closeCurseDetail() {
+    if (el.curseDetailOverlay.classList.contains('hidden')) return;
+
+    stopCurseFailTimer();
+    curseDetailPlayerId = null;
+    el.curseDetailOverlay.classList.add('hidden');
+    el.curseDetailOverlay.setAttribute('aria-hidden', 'true');
+    el.cursePenaltyBlock.classList.add('hidden');
+    el.cursePenaltyBtn.hidden = false;
+  }
+
+  function revealCursePenalty() {
+    const curse = curseDetailPlayerId ? curseForPlayer(curseDetailPlayerId) : null;
+    if (!curse) return;
+
+    el.cursePenaltyBtn.hidden = true;
+    el.cursePenaltyBlock.classList.remove('hidden');
+    el.cursePenaltyText.textContent = curse.failPenalty;
+    if (curse.failTimerSec > 0) {
+      setupCurseFailTimer(curse.failTimerSec);
+    } else {
+      stopCurseFailTimer();
+    }
+    el.cursePenaltyBlock.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+
+  function removeCurrentCurseDetail() {
+    if (!curseDetailPlayerId) return;
+    const playerId = curseDetailPlayerId;
+    if (!removeCurseForPlayer(playerId, { toast: true })) return;
+    closeCurseDetail();
+  }
+
+  /* ---------------------------------------------------------
+     Паранойя: скрытый вопрос и монетка
+     --------------------------------------------------------- */
+
+  function updateParanoiaControls() {
+    const paranoia = activeParanoia;
+    const busy = ui.paranoiaBusy;
+    const coinLocked = !paranoia || !paranoia.read || paranoia.flipped || Boolean(paranoia.result) || busy;
+
+    el.paranoiaCoinBtn.disabled = coinLocked;
+    el.paranoiaAnotherBtn.disabled = !paranoia || paranoia.flipped || Boolean(paranoia.result) || busy;
+    el.paranoiaAnotherBtn.hidden = !paranoia || paranoia.flipped || Boolean(paranoia.result);
+    el.paranoiaCoinBtn.hidden = !paranoia || paranoia.flipped || Boolean(paranoia.result);
+
+    if (!paranoia || !paranoia.read) {
+      el.paranoiaCoinLabel.textContent = 'Сначала зажми и прочитай вопрос';
+    } else if (!paranoia.flipped && !paranoia.result) {
+      el.paranoiaCoinLabel.textContent = 'Монетка решит судьбу вопроса';
+    }
+  }
+
+  function resetParanoiaQuestionView() {
+    el.paranoiaCoin.classList.remove('is-tossing');
+    el.paranoiaQuestionZone.classList.remove('is-revealed', 'is-burning');
+    el.paranoiaQuestionHint.hidden = false;
+    el.paranoiaQuestionText.hidden = true;
+    el.paranoiaResult.classList.add('hidden');
+    el.paranoiaResult.classList.remove('is-burn');
+    el.paranoiaMain.classList.remove('hidden');
+    el.paranoiaOverlay.classList.remove('is-flashing');
+    ui.paranoiaBusy = false;
+    updateParanoiaControls();
+  }
+
+  function renderParanoiaCard() {
+    if (!activeParanoia) return;
+    const player = currentPlayer();
+    el.paranoiaLevelLabel.textContent = `Уровень ${activeParanoia.level}`;
+    el.paranoiaPlayer.textContent = player ? player.name : '—';
+    el.paranoiaRoast.textContent = activeParanoia.card.roast || '';
+    el.paranoiaQuestionText.textContent = activeParanoia.card.task;
+    resetParanoiaQuestionView();
+  }
+
+  function showParanoiaOverlay(card, level) {
+    stopAllTimers();
+    activeParanoia = {
+      card,
+      level,
+      read: false,
+      flipped: false,
+      result: null
+    };
+    renderParanoiaCard();
+    el.paranoiaOverlay.classList.remove('hidden');
+    el.paranoiaOverlay.setAttribute('aria-hidden', 'false');
+    window.setTimeout(() => el.paranoiaQuestionZone.focus({ preventScroll: true }), 40);
+  }
+
+  function closeParanoiaOverlay() {
+    if (paranoiaTossTimer) {
+      window.clearTimeout(paranoiaTossTimer);
+      paranoiaTossTimer = null;
+    }
+    activeParanoia = null;
+    ui.paranoiaBusy = false;
+    el.paranoiaOverlay.classList.add('hidden');
+    el.paranoiaOverlay.setAttribute('aria-hidden', 'true');
+    el.paranoiaOverlay.classList.remove('is-flashing');
+    el.paranoiaCoin.classList.remove('is-tossing');
+    el.paranoiaQuestionZone.classList.remove('is-revealed', 'is-burning');
+    el.paranoiaMain.classList.remove('hidden');
+    el.paranoiaResult.classList.add('hidden');
+    ui.card = null;
+    hideCardOverlay();
+    showChooseScreen();
+    updateGameHeader();
+  }
+
+  async function openParanoiaManual() {
+    if (!game.isPlaying) return;
+    if (ui.processing || specialOverlayOpen()) return;
+    if (players.length < 3) {
+      showToast('Для Паранойи нужно минимум 3 игрока');
+      return;
+    }
+
+    ui.processing = true;
+    stopAllTimers();
+
+    try {
+      const { card, level } = await fetchSpecialCard('paranoia');
+      ui.card = null;
+      hideCardOverlay();
+      showChooseScreen();
+      showParanoiaOverlay(card, level);
+    } catch (error) {
+      if (isIgnorableError(error)) {
+        restoreActiveTimerUI();
+      } else {
+        showApiError(error, () => openParanoiaManual());
+      }
+    } finally {
+      ui.processing = false;
+    }
+  }
+
+  async function openParanoiaForTurn() {
+    if (!game.isPlaying || players.length < 3) return;
+
+    try {
+      const { card, level } = await fetchSpecialCard('paranoia');
+      ui.card = null;
+      hideCardOverlay();
+      showChooseScreen();
+      showParanoiaOverlay(card, level);
+    } catch (error) {
+      if (isIgnorableError(error)) {
+        restoreActiveTimerUI();
+      } else {
+        showApiError(error, () => openParanoiaForTurn());
+      }
+    }
+  }
+
+  async function loadAnotherParanoiaQuestion() {
+    if (!activeParanoia || activeParanoia.flipped || activeParanoia.result || ui.paranoiaBusy) return;
+
+    ui.paranoiaBusy = true;
+    updateParanoiaControls();
+
+    try {
+      const { card, level } = await fetchSpecialCard('paranoia');
+      if (!activeParanoia) return;
+      activeParanoia.card = card;
+      activeParanoia.level = level;
+      activeParanoia.read = false;
+      activeParanoia.flipped = false;
+      activeParanoia.result = null;
+      renderParanoiaCard();
+    } catch (error) {
+      if (!isIgnorableError(error)) {
+        showApiError(error, () => loadAnotherParanoiaQuestion());
+      }
+    } finally {
+      ui.paranoiaBusy = false;
+      updateParanoiaControls();
+    }
+  }
+
+  function revealParanoiaQuestion(event) {
+    if (!activeParanoia || activeParanoia.flipped || activeParanoia.result || ui.paranoiaBusy) return;
+    if (event && event.cancelable) event.preventDefault();
+
+    activeParanoia.read = true;
+    el.paranoiaQuestionZone.classList.add('is-revealed');
+    el.paranoiaQuestionHint.hidden = true;
+    el.paranoiaQuestionText.hidden = false;
+    updateParanoiaControls();
+  }
+
+  function hideParanoiaQuestion() {
+    el.paranoiaQuestionZone.classList.remove('is-revealed');
+    el.paranoiaQuestionHint.hidden = false;
+    el.paranoiaQuestionText.hidden = true;
+  }
+
+  function vibrateShort(pattern = 35) {
+    try {
+      if (navigator.vibrate) navigator.vibrate(pattern);
+    } catch (error) {
+      /* no-op */
+    }
+  }
+
+  function playCoinTossSound() {
+    const context = ensureAudio();
+    if (!context) return;
+
+    const schedule = () => {
+      try {
+        const start = context.currentTime + 0.02;
+        for (let index = 0; index < 6; index += 1) {
+          const oscillator = context.createOscillator();
+          const gain = context.createGain();
+          const at = start + index * 0.17;
+          oscillator.type = 'triangle';
+          oscillator.frequency.setValueAtTime(760 + index * 85, at);
+          gain.gain.setValueAtTime(0.0001, at);
+          gain.gain.linearRampToValueAtTime(0.075, at + 0.008);
+          gain.gain.exponentialRampToValueAtTime(0.0001, at + 0.07);
+          oscillator.connect(gain);
+          gain.connect(context.destination);
+          oscillator.start(at);
+          oscillator.stop(at + 0.085);
+        }
+      } catch (error) {
+        /* no-op */
+      }
+    };
+
+    if (context.state === 'suspended') {
+      context.resume().then(schedule).catch(() => {});
+    } else {
+      schedule();
+    }
+  }
+
+  function playParanoiaOutcomeSound(kind) {
+    const context = ensureAudio();
+    if (!context) return;
+
+    const schedule = () => {
+      try {
+        const start = context.currentTime + 0.02;
+        const notes = kind === 'reveal' ? [440, 690, 980] : [420, 300, 170];
+        notes.forEach((frequency, index) => {
+          const oscillator = context.createOscillator();
+          const gain = context.createGain();
+          const at = start + index * 0.13;
+          oscillator.type = kind === 'reveal' ? 'sawtooth' : 'triangle';
+          oscillator.frequency.setValueAtTime(frequency, at);
+          gain.gain.setValueAtTime(0.0001, at);
+          gain.gain.linearRampToValueAtTime(kind === 'reveal' ? 0.13 : 0.09, at + 0.012);
+          gain.gain.exponentialRampToValueAtTime(0.0001, at + 0.25);
+          oscillator.connect(gain);
+          gain.connect(context.destination);
+          oscillator.start(at);
+          oscillator.stop(at + 0.28);
+        });
+      } catch (error) {
+        /* no-op */
+      }
+    };
+
+    if (context.state === 'suspended') {
+      context.resume().then(schedule).catch(() => {});
+    } else {
+      schedule();
+    }
+  }
+
+  function presentParanoiaResult(kind) {
+    if (!activeParanoia) return;
+    activeParanoia.result = kind;
+    ui.paranoiaBusy = false;
+    el.paranoiaMain.classList.add('hidden');
+    el.paranoiaResult.classList.remove('hidden');
+    el.paranoiaResult.classList.toggle('is-burn', kind === 'burn');
+    el.paranoiaOverlay.classList.remove('is-flashing');
+
+    if (kind === 'reveal') {
+      el.paranoiaResultIcon.textContent = '🔥';
+      el.paranoiaResultKicker.textContent = 'Монетка решила: вопрос раскрыт';
+      el.paranoiaResultTitle.textContent = 'ВСКРЫТЬ!';
+      el.paranoiaResultText.textContent = activeParanoia.card.task;
+      el.paranoiaOverlay.classList.add('is-flashing');
+      window.setTimeout(() => el.paranoiaOverlay.classList.remove('is-flashing'), 800);
+      window.setTimeout(() => el.paranoiaNextBtn.focus({ preventScroll: true }), 80);
+    } else {
+      el.paranoiaResultIcon.textContent = '💨';
+      el.paranoiaResultKicker.textContent = 'Монетка решила: вопрос сгорел';
+      el.paranoiaResultTitle.textContent = 'СЖЕЧЬ!';
+      el.paranoiaResultText.textContent = 'Тайна ушла в могилу. Пусть теперь гадают, за что прилетело.';
+      el.paranoiaQuestionText.textContent = '';
+      activeParanoia.card.task = '';
+      window.setTimeout(() => el.paranoiaNextBtn.focus({ preventScroll: true }), 80);
+    }
+
+    updateParanoiaControls();
+  }
+
+  function finishParanoiaToss(kind) {
+    if (!activeParanoia) return;
+
+    el.paranoiaCoin.classList.remove('is-tossing');
+
+    if (kind === 'reveal') {
+      playParanoiaOutcomeSound('reveal');
+      vibrateShort([70, 40, 130]);
+      presentParanoiaResult('reveal');
+      return;
+    }
+
+    el.paranoiaCoinLabel.textContent = 'Вопрос догорает…';
+    el.paranoiaQuestionZone.classList.add('is-burning');
+    playParanoiaOutcomeSound('burn');
+    vibrateShort(110);
+
+    if (paranoiaTossTimer) window.clearTimeout(paranoiaTossTimer);
+    paranoiaTossTimer = window.setTimeout(() => {
+      paranoiaTossTimer = null;
+      if (!activeParanoia) return;
+      presentParanoiaResult('burn');
+    }, 720);
+  }
+
+  function tossParanoiaCoin() {
+    if (!activeParanoia || !activeParanoia.read || activeParanoia.flipped || activeParanoia.result || ui.paranoiaBusy) return;
+
+    ensureAudio();
+    vibrateShort(35);
+    playCoinTossSound();
+
+    activeParanoia.flipped = true;
+    ui.paranoiaBusy = true;
+    el.paranoiaCoin.classList.add('is-tossing');
+    el.paranoiaCoinLabel.textContent = 'Монетка в воздухе…';
+    updateParanoiaControls();
+
+    if (paranoiaTossTimer) window.clearTimeout(paranoiaTossTimer);
+    paranoiaTossTimer = window.setTimeout(() => {
+      paranoiaTossTimer = null;
+      if (!activeParanoia) return;
+      const result = Math.random() < 0.5 ? 'reveal' : 'burn';
+      finishParanoiaToss(result);
+    }, 1500);
+  }
+
+  /* ---------------------------------------------------------
      Настройки DeepSeek
      --------------------------------------------------------- */
 
@@ -2223,6 +3282,51 @@
     el.keyWarning.hidden = !draft || draft.startsWith('sk-');
   }
 
+  function updateThemeMemoryUI() {
+    const total = totalRememberedThemes();
+    el.themeMemoryCount.textContent = `Запомнено тем: ${total}`;
+  }
+
+  function closeThemeMemoryConfirm(options = {}) {
+    if (el.themeMemoryConfirm.classList.contains('hidden')) return;
+    el.themeMemoryConfirm.classList.add('hidden');
+    el.resetThemeMemoryBtn.setAttribute('aria-expanded', 'false');
+    if (options.restoreFocus) {
+      try {
+        el.resetThemeMemoryBtn.focus({ preventScroll: true });
+      } catch (error) {
+        /* Фокус — необязательное удобство. */
+      }
+    }
+  }
+
+  function openThemeMemoryConfirm() {
+    updateThemeMemoryUI();
+    el.themeMemoryConfirm.classList.remove('hidden');
+    el.resetThemeMemoryBtn.setAttribute('aria-expanded', 'true');
+    try {
+      el.themeMemoryConfirm.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    } catch (error) {
+      /* Плавная прокрутка необязательна. */
+    }
+    window.setTimeout(() => el.confirmThemeMemoryBtn.focus({ preventScroll: true }), 60);
+  }
+
+  function resetThemeMemory() {
+    usedTopics = createEmptyUsedTopics();
+    themeDeck = shuffleThemeIndices();
+    saveUsedTopics();
+    saveThemeDeck();
+
+    generationId += 1;
+    abortAllInFlight();
+    buffers = Object.create(null);
+
+    updateThemeMemoryUI();
+    closeThemeMemoryConfirm({ restoreFocus: true });
+    showToast('Память тем очищена');
+  }
+
   function openSettings() {
     if (ui.loaderOpen) return;
     ui.lastFocused = document.activeElement;
@@ -2231,6 +3335,8 @@
     el.apiKeyInput.value = apiKey;
     el.noRememberKey.checked = keyInSession;
     updateKeyWarning();
+    updateThemeMemoryUI();
+    closeThemeMemoryConfirm();
     el.settingsOverlay.classList.remove('hidden');
     el.settingsOverlay.setAttribute('aria-hidden', 'false');
 
@@ -2241,6 +3347,7 @@
 
   function closeSettings(options = {}) {
     if (el.settingsOverlay.classList.contains('hidden')) return;
+    closeThemeMemoryConfirm();
     el.settingsOverlay.classList.add('hidden');
     el.settingsOverlay.setAttribute('aria-hidden', 'true');
     el.apiKeyInput.value = '';
@@ -2356,6 +3463,14 @@
     el.menuBtn.addEventListener('click', openLobby);
 
     el.groupBtn.addEventListener('click', openGroupManual);
+    el.paranoiaBtn.addEventListener('click', openParanoiaManual);
+    el.curseBtn.addEventListener('click', openCurseManual);
+
+    el.curseChips.addEventListener('click', (event) => {
+      const chip = event.target.closest('[data-curse-player]');
+      if (!chip) return;
+      openCurseDetail(chip.dataset.cursePlayer);
+    });
 
     el.autoLevelBtn.addEventListener('click', enableAutoLevel);
     el.levelButtons.forEach((button) => {
@@ -2367,13 +3482,47 @@
     });
 
     el.cardCloseBtn.addEventListener('click', closeNormalCard);
+    el.takeCurseBtn.addEventListener('click', openCurseMerge);
     el.anotherCardBtn.addEventListener('click', requestAnotherCard);
-    el.doneTurnBtn.addEventListener('click', completeTurn);
+    el.doneTurnBtn.addEventListener('click', () => completeTurn());
     el.cardContent.addEventListener('click', handleCardContentClick);
 
     el.groupAnotherBtn.addEventListener('click', groupAnotherCard);
     el.groupEndBtn.addEventListener('click', endGroup);
     el.groupContent.addEventListener('click', handleCardContentClick);
+
+    el.paranoiaQuestionZone.addEventListener('pointerdown', revealParanoiaQuestion);
+    el.paranoiaQuestionZone.addEventListener('pointerup', hideParanoiaQuestion);
+    el.paranoiaQuestionZone.addEventListener('pointercancel', hideParanoiaQuestion);
+    el.paranoiaQuestionZone.addEventListener('pointerleave', hideParanoiaQuestion);
+    el.paranoiaQuestionZone.addEventListener('contextmenu', (event) => event.preventDefault());
+    el.paranoiaQuestionZone.addEventListener('dragstart', (event) => event.preventDefault());
+    el.paranoiaQuestionZone.addEventListener('selectstart', (event) => event.preventDefault());
+    el.paranoiaQuestionZone.addEventListener('keydown', (event) => {
+      if (event.key !== ' ' && event.key !== 'Enter') return;
+      event.preventDefault();
+      if (!event.repeat) revealParanoiaQuestion(event);
+    });
+    el.paranoiaQuestionZone.addEventListener('keyup', (event) => {
+      if (event.key !== ' ' && event.key !== 'Enter') return;
+      hideParanoiaQuestion();
+    });
+    el.paranoiaQuestionZone.addEventListener('blur', hideParanoiaQuestion);
+    el.paranoiaAnotherBtn.addEventListener('click', loadAnotherParanoiaQuestion);
+    el.paranoiaCoinBtn.addEventListener('click', tossParanoiaCoin);
+    el.paranoiaNextBtn.addEventListener('click', closeParanoiaOverlay);
+    document.addEventListener('pointerup', hideParanoiaQuestion);
+    document.addEventListener('pointercancel', hideParanoiaQuestion);
+
+    el.curseOverlayCloseBtn.addEventListener('click', closeCurseOverlayAndContinue);
+    el.curseDetailCloseBtn.addEventListener('click', closeCurseDetail);
+    el.curseDetailOverlay.addEventListener('click', (event) => {
+      if (event.target === el.curseDetailOverlay) closeCurseDetail();
+    });
+    el.cursePenaltyBtn.addEventListener('click', revealCursePenalty);
+    el.curseRemoveBtn.addEventListener('click', removeCurrentCurseDetail);
+    el.curseFailToggle.addEventListener('click', toggleCurseFailTimer);
+    el.curseFailReset.addEventListener('click', resetCurseFailTimerState);
 
     el.loaderCancelBtn.addEventListener('click', cancelCurrentLoader);
 
@@ -2392,6 +3541,11 @@
     el.noRememberKey.addEventListener('change', handleRememberToggle);
     el.saveKeyBtn.addEventListener('click', saveApiKey);
     el.clearKeyBtn.addEventListener('click', clearApiKey);
+    el.resetThemeMemoryBtn.addEventListener('click', openThemeMemoryConfirm);
+    el.cancelThemeMemoryBtn.addEventListener('click', () => {
+      closeThemeMemoryConfirm({ restoreFocus: true });
+    });
+    el.confirmThemeMemoryBtn.addEventListener('click', resetThemeMemory);
     el.settingsOverlay.addEventListener('click', (event) => {
       if (event.target === el.settingsOverlay) closeSettings();
     });
@@ -2403,9 +3557,19 @@
       } else if (!el.confirmEndOverlay.classList.contains('hidden')) {
         closeEndGameConfirm();
       } else if (!el.settingsOverlay.classList.contains('hidden')) {
-        closeSettings();
+        if (!el.themeMemoryConfirm.classList.contains('hidden')) {
+          closeThemeMemoryConfirm({ restoreFocus: true });
+        } else {
+          closeSettings();
+        }
       } else if (!el.errorOverlay.classList.contains('hidden')) {
         hideError();
+      } else if (!el.curseDetailOverlay.classList.contains('hidden')) {
+        closeCurseDetail();
+      } else if (!el.paranoiaOverlay.classList.contains('hidden')) {
+        return;
+      } else if (!el.curseOverlay.classList.contains('hidden')) {
+        return;
       } else if (!el.groupOverlay.classList.contains('hidden')) {
         endGroup();
       } else if (ui.card) {
