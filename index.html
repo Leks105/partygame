@@ -438,6 +438,43 @@
     </section>
   </div>
 
+  <div class="modal pulse-overlay hidden" id="pulseOverlay" aria-hidden="true">
+    <section class="pulse-panel" id="pulsePanel" role="dialog" aria-modal="true" aria-labelledby="pulseTitle">
+      <header class="pulse-head">
+        <div class="pulse-heading">
+          <p class="pulse-kicker">СКАНЕР ПУЛЬСА</p>
+          <h2 id="pulseTitle">🫀 ДЕТЕКТОР ПИЗДЕЖА</h2>
+        </div>
+        <span class="pulse-live" aria-hidden="true"><i></i>LIVE</span>
+      </header>
+      <p class="pulse-subtitle">Приложи и держи палец 2.5 секунды — ведущий проверяет пульс</p>
+
+      <div class="pulse-stage">
+        <div class="pulse-scanner" id="pulseScanner" role="button" tabindex="0" aria-label="Приложи и держи палец 2.5 секунды, чтобы проверить пульс">
+          <svg class="pulse-progress" viewBox="0 0 120 120" aria-hidden="true">
+            <circle class="pulse-progress-track" cx="60" cy="60" r="54"></circle>
+            <circle class="pulse-progress-ring" id="pulseProgressCircle" cx="60" cy="60" r="54"></circle>
+          </svg>
+          <span class="pulse-rings" aria-hidden="true"></span>
+          <div class="pulse-core">
+            <span class="pulse-finger" aria-hidden="true">🫀</span>
+            <div class="pulse-bpm"><strong id="pulseBpm">74</strong><span>BPM</span></div>
+            <p class="pulse-scan-hint" id="pulseScanHint">Приложи палец</p>
+          </div>
+        </div>
+
+        <div class="pulse-verdict" id="pulseVerdict" role="status" aria-live="polite" hidden>
+          <p class="pulse-verdict-title" id="pulseVerdictTitle"></p>
+          <p class="pulse-verdict-detail" id="pulseVerdictDetail"></p>
+        </div>
+
+        <p class="pulse-warning" id="pulseWarning" role="status" hidden>Палец дрогнул? Держи до конца, не дергайся!</p>
+      </div>
+
+      <button class="btn btn-quiet pulse-cancel" id="pulseCancelBtn" type="button">Отмена</button>
+    </section>
+  </div>
+
   <div class="modal settings-overlay hidden" id="settingsOverlay" aria-hidden="true">
     <section class="settings-sheet" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
       <header class="sheet-head">

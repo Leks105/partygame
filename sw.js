@@ -6,7 +6,7 @@
 
 'use strict';
 
-const CACHE_NAME = 'pravda-ili-deystvie-v4';
+const CACHE_NAME = 'pravda-ili-deystvie-v5';
 const CACHE_TIMEOUT_MS = 3000;
 const APP_SHELL = [
   './',

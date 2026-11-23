@@ -47,6 +47,31 @@
 
   const THEME_TYPES = new Set(['truth', 'dare', 'group', 'paranoia']);
 
+  const PULSE_HOLD_MS = 2500;
+  const PULSE_RING_CIRCUMFERENCE = 2 * Math.PI * 54;
+  const PULSE_PENALTY_BPM = 142;
+  const PULSE_PARDON_BPM = 64;
+  const PARDON_PHRASES = {
+    standup: [
+      'Пульс ровный, как у профессионального киллера. Либо чистая правда, либо пора к врачу — живи.',
+      'Датчик молчит. Не верю ни единому слову, но техника на твоей стороне — проехали.',
+      'Сердце даже не дёрнулось. Либо святая искренность, либо наглость 80-го уровня. Штраф отменяется.',
+      'Ни единого скачка. Вот это выдержка — сегодня добивания не будет.'
+    ],
+    therapist: [
+      'Пульс идеально ровный. Хрестоматийный признак социопатии, запишем в карточку — но сегодня без штрафа.',
+      'Организм вообще не реагирует на стресс. Подавление эмоций 10 из 10, живи пока.',
+      'Никакого скачка давления. Либо искренность, либо глубокое вытеснение — разберём на следующем сеансе.',
+      'Удивительное хладнокровие. Защитные механизмы работают безупречно — помилование.'
+    ],
+    tamada: [
+      'Дорогие гости, бурные аплодисменты! Пульс как у младенца — судьба дарит помилование!',
+      'Чудо на нашем празднике жизни! Сердце бьётся ровно, штраф отменяется — но мы всё запомним!',
+      'Вот это стальная выдержка! Приборы в норме, проходим дальше без наказания!',
+      'Сегодня удача на вашей стороне! Никакого добивания — давайте просто восхитимся этим хладнокровием!'
+    ]
+  };
+
   const STORAGE_KEYS = {
     players: 'pid18_players',
     persona: 'pid18_persona',
@@ -348,6 +373,18 @@
     curseFailReset: byId('curseFailReset'),
     curseRemoveBtn: byId('curseRemoveBtn'),
 
+    pulseOverlay: byId('pulseOverlay'),
+    pulsePanel: byId('pulsePanel'),
+    pulseScanner: byId('pulseScanner'),
+    pulseProgressCircle: byId('pulseProgressCircle'),
+    pulseBpm: byId('pulseBpm'),
+    pulseScanHint: byId('pulseScanHint'),
+    pulseVerdict: byId('pulseVerdict'),
+    pulseVerdictTitle: byId('pulseVerdictTitle'),
+    pulseVerdictDetail: byId('pulseVerdictDetail'),
+    pulseWarning: byId('pulseWarning'),
+    pulseCancelBtn: byId('pulseCancelBtn'),
+
     settingsOverlay: byId('settingsOverlay'),
     settingsCloseBtn: byId('settingsCloseBtn'),
     apiKeyInput: byId('apiKeyInput'),
@@ -435,6 +472,25 @@
 
   const activeTimers = new Map();
   let audioCtx = null;
+
+  const pulse = {
+    card: null,
+    returnFocus: null,
+    active: false,
+    completed: false,
+    outcome: null,
+    pointerId: null,
+    startAt: 0,
+    lastBpmAt: 0,
+    bpm: 74,
+    raf: 0,
+    runId: 0,
+    resultTimer: 0,
+    warningTimer: 0,
+    audioNodes: [],
+    vibrationTimers: [],
+    audioRun: 0
+  };
 
   /* ---------------------------------------------------------
      Утилиты
@@ -1936,6 +1992,8 @@
     const canReroll = showTarget && players.length >= 3;
     const hasBs = card.type === 'truth' && Boolean(card.bs_penalty);
     const bsSeconds = hasBs ? card.bs_timer_sec : 0;
+    const bsLocked = Boolean(card.bsRevealed || card.bsPardoned);
+    const pardonBpm = Number(card.bsPardonBpm) || PULSE_PARDON_BPM;
 
     const targetHtml = showTarget
       ? `<div class="card-target${canReroll ? ' has-reroll' : ''}">
@@ -1949,11 +2007,16 @@
       : '';
 
     const bsHtml = hasBs
-      ? `<button class="bs-prompt" type="button" data-action="reveal-bs" aria-expanded="${card.bsRevealed ? 'true' : 'false'}" ${card.bsRevealed ? 'hidden' : ''}>🤮 Душно / Пиздёж!</button>
+      ? `<button class="bs-prompt" type="button" data-action="reveal-bs" aria-expanded="${bsLocked ? 'true' : 'false'}" ${bsLocked ? 'hidden' : ''}>🤮 Душно / Пиздёж!</button>
         <div class="bs-penalty" ${card.bsRevealed ? '' : 'hidden'}>
           <p class="bs-title">ДОБИВАНИЕ ОТ ВЕДУЩЕГО</p>
           <p class="bs-text">${escapeHTML(card.bs_penalty)}</p>
           ${timerMarkup('bs', bsSeconds, 'Таймер добивания')}
+        </div>
+        <div class="bs-pardon" ${card.bsPardoned ? '' : 'hidden'}>
+          <p class="bs-pardon-title">ПОМИЛОВАНИЕ ОТ ВЕДУЩЕГО</p>
+          <p class="bs-pardon-bpm">${pardonBpm} BPM — СТАЛЬНЫЕ НЕРВЫ</p>
+          <p class="bs-pardon-text">${escapeHTML(card.bsPardonPhrase || '')}</p>
         </div>`
       : '';
 
@@ -2033,7 +2096,7 @@
   }
 
   function revealBsPenalty() {
-    if (!ui.card || ui.card.type !== 'truth' || !ui.card.bs_penalty) return;
+    if (!ui.card || ui.card.type !== 'truth' || !ui.card.bs_penalty || ui.card.bsPardoned) return;
     ui.card.bsRevealed = true;
     const button = el.cardContent.querySelector('[data-action="reveal-bs"]');
     const penalty = el.cardContent.querySelector('.bs-penalty');
@@ -2047,6 +2110,470 @@
     }
   }
 
+  function revealBsPardon() {
+    if (!ui.card || ui.card.type !== 'truth' || !ui.card.bs_penalty || !ui.card.bsPardoned) return;
+    const button = el.cardContent.querySelector('[data-action="reveal-bs"]');
+    const pardon = el.cardContent.querySelector('.bs-pardon');
+    if (button) {
+      button.hidden = true;
+      button.setAttribute('aria-expanded', 'true');
+    }
+    if (pardon) {
+      const bpm = pardon.querySelector('.bs-pardon-bpm');
+      const text = pardon.querySelector('.bs-pardon-text');
+      if (bpm) bpm.textContent = `${Number(ui.card.bsPardonBpm) || PULSE_PARDON_BPM} BPM — СТАЛЬНЫЕ НЕРВЫ`;
+      if (text) text.textContent = ui.card.bsPardonPhrase || '';
+      pardon.hidden = false;
+      pardon.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  }
+
+  function setPulseProgress(progress) {
+    const clamped = Math.max(0, Math.min(1, Number(progress) || 0));
+    if (el.pulseProgressCircle) {
+      el.pulseProgressCircle.style.strokeDasharray = String(PULSE_RING_CIRCUMFERENCE);
+      el.pulseProgressCircle.style.strokeDashoffset = String(PULSE_RING_CIRCUMFERENCE * (1 - clamped));
+    }
+    el.pulseScanner.style.setProperty('--pulse-glow', `${(clamped * 46).toFixed(1)}px`);
+  }
+
+  function clearPulseWarning() {
+    if (pulse.warningTimer) {
+      window.clearTimeout(pulse.warningTimer);
+      pulse.warningTimer = 0;
+    }
+    el.pulseWarning.hidden = true;
+  }
+
+  function showPulseWarning() {
+    clearPulseWarning();
+    el.pulseWarning.hidden = false;
+    pulse.warningTimer = window.setTimeout(() => {
+      pulse.warningTimer = 0;
+      el.pulseWarning.hidden = true;
+    }, 1500);
+  }
+
+  function stopPulseAudioNodes() {
+    pulse.audioRun += 1;
+    const nodes = pulse.audioNodes;
+    pulse.audioNodes = [];
+    nodes.forEach((node) => {
+      try {
+        node.stop();
+      } catch (error) {
+        /* Узел мог уже завершиться. */
+      }
+      try {
+        node.disconnect();
+      } catch (error) {
+        /* no-op */
+      }
+    });
+  }
+
+  function clearPulseVibrationTimers() {
+    pulse.vibrationTimers.forEach((timer) => window.clearTimeout(timer));
+    pulse.vibrationTimers = [];
+  }
+
+  function schedulePulseVibrations(runId) {
+    [120, 560, 960, 1290, 1590, 1850].forEach((offset) => {
+      const timer = window.setTimeout(() => {
+        if (pulse.active && pulse.runId === runId) vibrateShort(40);
+      }, offset);
+      pulse.vibrationTimers.push(timer);
+    });
+  }
+
+  function playPulseSeries(runId) {
+    const context = ensureAudio();
+    if (!context) return;
+
+    const schedule = () => {
+      if (!pulse.active || pulse.runId !== runId) return;
+      try {
+        const start = context.currentTime + 0.035;
+        const offsets = [0.1, 0.55, 0.93, 1.27, 1.57, 1.84];
+        offsets.forEach((offset, index) => {
+          const oscillator = context.createOscillator();
+          const gain = context.createGain();
+          const at = start + offset;
+          const frequency = 640 + index * 85;
+          oscillator.type = 'sine';
+          oscillator.frequency.setValueAtTime(frequency, at);
+          oscillator.frequency.exponentialRampToValueAtTime(frequency + 36, at + 0.07);
+          gain.gain.setValueAtTime(0.0001, at);
+          gain.gain.linearRampToValueAtTime(0.085, at + 0.008);
+          gain.gain.exponentialRampToValueAtTime(0.0001, at + 0.075);
+          oscillator.connect(gain);
+          gain.connect(context.destination);
+          oscillator.start(at);
+          oscillator.stop(at + 0.09);
+          pulse.audioNodes.push(oscillator);
+        });
+      } catch (error) {
+        /* Звук — украшение, а не критичная функция. */
+      }
+    };
+
+    if (context.state === 'suspended') {
+      context.resume().then(schedule).catch(() => {});
+    } else {
+      schedule();
+    }
+  }
+
+  function playPulseOutcomeSound(kind) {
+    const context = ensureAudio();
+    if (!context) return;
+    const runId = pulse.runId;
+
+    const schedule = () => {
+      if (pulse.runId !== runId || pulse.outcome !== kind) return;
+      try {
+        const start = context.currentTime + 0.02;
+        const tones = kind === 'penalty'
+          ? [
+              { frequency: 880, at: 0, duration: 0.15, type: 'square', volume: 0.15 },
+              { frequency: 620, at: 0.23, duration: 0.26, type: 'square', volume: 0.15 }
+            ]
+          : [
+              { frequency: 523.25, at: 0, duration: 0.3, type: 'sine', volume: 0.07 },
+              { frequency: 659.25, at: 0.15, duration: 0.42, type: 'sine', volume: 0.065 }
+            ];
+
+        tones.forEach((tone) => {
+          const oscillator = context.createOscillator();
+          const gain = context.createGain();
+          const at = start + tone.at;
+          oscillator.type = tone.type;
+          oscillator.frequency.setValueAtTime(tone.frequency, at);
+          gain.gain.setValueAtTime(0.0001, at);
+          gain.gain.linearRampToValueAtTime(tone.volume, at + 0.012);
+          gain.gain.exponentialRampToValueAtTime(0.0001, at + tone.duration);
+          oscillator.connect(gain);
+          gain.connect(context.destination);
+          oscillator.start(at);
+          oscillator.stop(at + tone.duration + 0.03);
+          pulse.audioNodes.push(oscillator);
+        });
+      } catch (error) {
+        /* no-op */
+      }
+    };
+
+    if (context.state === 'suspended') {
+      context.resume().then(schedule).catch(() => {});
+    } else {
+      schedule();
+    }
+  }
+
+  function resetPulseScannerDesign() {
+    el.pulsePanel.classList.remove('is-scanning', 'is-penalty', 'is-calm');
+    el.pulseScanner.classList.remove('is-scanning', 'is-penalty', 'is-calm');
+    el.pulseCancelBtn.hidden = false;
+    el.pulseCancelBtn.disabled = false;
+    el.pulseVerdict.hidden = true;
+    el.pulseVerdictTitle.textContent = '';
+    el.pulseVerdictDetail.textContent = '';
+    el.pulseBpm.textContent = '74';
+    el.pulseScanHint.textContent = 'Приложи палец';
+    clearPulseWarning();
+    setPulseProgress(0);
+  }
+
+  function closePulseScanner(options = {}) {
+    pulse.active = false;
+    pulse.completed = false;
+    pulse.pointerId = null;
+    pulse.runId += 1;
+
+    if (pulse.raf) {
+      cancelAnimationFrame(pulse.raf);
+      pulse.raf = 0;
+    }
+    if (pulse.resultTimer) {
+      window.clearTimeout(pulse.resultTimer);
+      pulse.resultTimer = 0;
+    }
+
+    clearPulseWarning();
+    stopPulseAudioNodes();
+    clearPulseVibrationTimers();
+
+    const focusTarget = pulse.returnFocus;
+    pulse.returnFocus = null;
+    pulse.card = null;
+    pulse.outcome = null;
+    pulse.bpm = 74;
+    pulse.pointerId = null;
+
+    el.pulseOverlay.classList.add('hidden');
+    el.pulseOverlay.setAttribute('aria-hidden', 'true');
+    resetPulseScannerDesign();
+
+    if (options.restoreFocus && focusTarget && document.contains(focusTarget) && !focusTarget.hidden) {
+      try {
+        focusTarget.focus({ preventScroll: true });
+      } catch (error) {
+        /* Фокус — необязательное удобство. */
+      }
+    }
+  }
+
+  function cancelPulseScanner() {
+    if (pulse.completed) return;
+    if (el.pulseOverlay.classList.contains('hidden')) return;
+    closePulseScanner({ restoreFocus: true });
+  }
+
+  function openPulseScanner() {
+    if (!ui.card || ui.card.type !== 'truth' || !ui.card.bs_penalty) return;
+    if (ui.card.bsRevealed || ui.card.bsPardoned) return;
+    if (!el.pulseOverlay.classList.contains('hidden')) return;
+
+    closePulseScanner();
+    pulse.card = ui.card;
+    pulse.returnFocus = el.cardContent.querySelector('[data-action="reveal-bs"]') || document.activeElement;
+    pulse.active = false;
+    pulse.completed = false;
+    pulse.outcome = null;
+    pulse.pointerId = null;
+    pulse.runId += 1;
+
+    const mainTimer = activeTimers.get('main');
+    if (mainTimer && mainTimer.running) pauseTimer(mainTimer);
+
+    resetPulseScannerDesign();
+    el.pulseOverlay.classList.remove('hidden');
+    el.pulseOverlay.setAttribute('aria-hidden', 'false');
+
+    window.setTimeout(() => {
+      if (!el.pulseOverlay.classList.contains('hidden') && !pulse.completed) {
+        try {
+          el.pulseScanner.focus({ preventScroll: true });
+        } catch (error) {
+          /* no-op */
+        }
+      }
+    }, 40);
+  }
+
+  function pulseTick() {
+    if (!pulse.active) return;
+
+    const elapsed = Date.now() - pulse.startAt;
+    const progress = Math.min(1, elapsed / PULSE_HOLD_MS);
+    setPulseProgress(progress);
+
+    const now = performance.now();
+    if (!pulse.lastBpmAt || now - pulse.lastBpmAt >= 72) {
+      const base = 74 + progress * 60;
+      const wobble = progress * (
+        Math.sin(elapsed / 92) * 4.2 +
+        Math.sin(elapsed / 34 + 1.2) * 2.4 +
+        (Math.random() * 2.8 - 1.4)
+      );
+      pulse.bpm = Math.max(74, Math.min(138, Math.round(base + wobble)));
+      el.pulseBpm.textContent = String(pulse.bpm);
+      pulse.lastBpmAt = now;
+    }
+
+    if (progress >= 1) {
+      finishPulseScan();
+      return;
+    }
+
+    pulse.raf = requestAnimationFrame(pulseTick);
+  }
+
+  function beginPulseHold(pointerId) {
+    if (pulse.active || pulse.completed) return;
+    if (!pulse.card || el.pulseOverlay.classList.contains('hidden')) return;
+
+    const context = ensureAudio();
+    if (context && context.state === 'suspended') {
+      context.resume().catch(() => {});
+    }
+
+    clearPulseWarning();
+    stopPulseAudioNodes();
+    clearPulseVibrationTimers();
+
+    pulse.runId += 1;
+    const runId = pulse.runId;
+    pulse.active = true;
+    pulse.completed = false;
+    pulse.outcome = null;
+    pulse.pointerId = Number.isFinite(pointerId) ? pointerId : null;
+    pulse.startAt = Date.now();
+    pulse.lastBpmAt = 0;
+    pulse.bpm = 74;
+
+    el.pulsePanel.classList.remove('is-penalty', 'is-calm');
+    el.pulsePanel.classList.add('is-scanning');
+    el.pulseScanner.classList.remove('is-penalty', 'is-calm');
+    el.pulseScanner.classList.add('is-scanning');
+    el.pulseCancelBtn.hidden = false;
+    el.pulseCancelBtn.disabled = false;
+    el.pulseVerdict.hidden = true;
+    el.pulseBpm.textContent = '74';
+    el.pulseScanHint.textContent = 'Считываем пульс...';
+    setPulseProgress(0);
+
+    playPulseSeries(runId);
+    schedulePulseVibrations(runId);
+    pulse.raf = requestAnimationFrame(pulseTick);
+  }
+
+  function resetPulseHold(showWarning) {
+    if (!pulse.active) return;
+
+    pulse.active = false;
+    pulse.pointerId = null;
+    pulse.runId += 1;
+    if (pulse.raf) {
+      cancelAnimationFrame(pulse.raf);
+      pulse.raf = 0;
+    }
+    stopPulseAudioNodes();
+    clearPulseVibrationTimers();
+
+    el.pulsePanel.classList.remove('is-scanning');
+    el.pulseScanner.classList.remove('is-scanning');
+    el.pulseBpm.textContent = '74';
+    el.pulseScanHint.textContent = 'Приложи палец';
+    setPulseProgress(0);
+
+    if (showWarning) showPulseWarning();
+  }
+
+  function finishPulseScan() {
+    if (!pulse.active) return;
+
+    pulse.active = false;
+    pulse.completed = true;
+    pulse.pointerId = null;
+    pulse.runId += 1;
+    if (pulse.raf) {
+      cancelAnimationFrame(pulse.raf);
+      pulse.raf = 0;
+    }
+
+    setPulseProgress(1);
+    stopPulseAudioNodes();
+    clearPulseVibrationTimers();
+    clearPulseWarning();
+    el.pulsePanel.classList.remove('is-scanning');
+    el.pulseScanner.classList.remove('is-scanning');
+    el.pulseCancelBtn.hidden = true;
+    el.pulseCancelBtn.disabled = true;
+    try {
+      el.pulseScanner.blur();
+    } catch (error) {
+      /* no-op */
+    }
+
+    const card = pulse.card;
+    if (!card || ui.card !== card || card.type !== 'truth' || card.bsRevealed || card.bsPardoned) {
+      closePulseScanner();
+      return;
+    }
+
+    const outcome = Math.random() < 0.85 ? 'penalty' : 'pardon';
+    pulse.outcome = outcome;
+
+    if (outcome === 'penalty') {
+      card.bsRevealed = true;
+      card.bsPardoned = false;
+      el.pulseBpm.textContent = String(PULSE_PENALTY_BPM);
+      el.pulseScanHint.textContent = 'ПУЛЬС ЗАШКАЛИВАЕТ!';
+      el.pulseVerdictTitle.textContent = '🚨 ПИЗДЁЖ ПОДТВЕРЖДЁН!';
+      el.pulseVerdictDetail.textContent = `${PULSE_PENALTY_BPM} BPM — ПУЛЬС ЗАШКАЛИВАЕТ!`;
+      el.pulsePanel.classList.add('is-penalty');
+      el.pulseScanner.classList.add('is-penalty');
+      playPulseOutcomeSound('penalty');
+      vibrateShort([200, 80, 300]);
+    } else {
+      const phrases = PARDON_PHRASES[persona] || PARDON_PHRASES.standup;
+      const phrase = phrases[Math.floor(Math.random() * phrases.length)];
+      card.bsPardoned = true;
+      card.bsRevealed = false;
+      card.bsPardonBpm = PULSE_PARDON_BPM;
+      card.bsPardonPhrase = phrase;
+      el.pulseBpm.textContent = String(PULSE_PARDON_BPM);
+      el.pulseScanHint.textContent = 'СТАЛЬНЫЕ НЕРВЫ';
+      el.pulseVerdictTitle.textContent = '✅ ПУЛЬС РОВНЫЙ. ПРОНЕСЛО!';
+      el.pulseVerdictDetail.textContent = `${PULSE_PARDON_BPM} BPM — СТАЛЬНЫЕ НЕРВЫ`;
+      el.pulsePanel.classList.add('is-calm');
+      el.pulseScanner.classList.add('is-calm');
+      playPulseOutcomeSound('pardon');
+      vibrateShort([80]);
+    }
+
+    el.pulseVerdict.hidden = false;
+    pulse.resultTimer = window.setTimeout(finishPulseVerdict, 1000);
+  }
+
+  function finishPulseVerdict() {
+    const card = pulse.card;
+    const outcome = pulse.outcome;
+    pulse.resultTimer = 0;
+    closePulseScanner();
+
+    if (!card || ui.card !== card) return;
+    if (outcome === 'pardon' || card.bsPardoned) {
+      revealBsPardon();
+    } else if (card.bsRevealed) {
+      revealBsPenalty();
+    }
+  }
+
+  function handlePulsePointerDown(event) {
+    if (event.button !== undefined && event.button !== 0) return;
+    if (event.cancelable) event.preventDefault();
+    if (pulse.active || pulse.completed) return;
+    beginPulseHold(event.pointerId);
+    try {
+      el.pulseScanner.focus({ preventScroll: true });
+    } catch (error) {
+      /* no-op */
+    }
+  }
+
+  function handlePulsePointerEnd(event) {
+    if (!pulse.active || pulse.pointerId === null) return;
+    if (event.pointerId !== pulse.pointerId) return;
+    resetPulseHold(true);
+  }
+
+  function handlePulsePointerMove(event) {
+    if (!pulse.active || pulse.pointerId === null) return;
+    if (event.pointerId !== pulse.pointerId) return;
+
+    const rect = el.pulseScanner.getBoundingClientRect();
+    const outside = event.clientX < rect.left ||
+      event.clientX > rect.right ||
+      event.clientY < rect.top ||
+      event.clientY > rect.bottom;
+    if (outside) resetPulseHold(true);
+  }
+
+  function handlePulseKeyDown(event) {
+    if (event.key !== ' ' && event.key !== 'Enter') return;
+    event.preventDefault();
+    if (event.repeat || pulse.active || pulse.completed) return;
+    beginPulseHold(null);
+  }
+
+  function handlePulseKeyUp(event) {
+    if (event.key !== ' ' && event.key !== 'Enter') return;
+    event.preventDefault();
+    if (pulse.active) resetPulseHold(true);
+  }
+
   function handleCardContentClick(event) {
     const timerButton = event.target.closest('[data-timer-action]');
     if (timerButton) {
@@ -2058,7 +2585,7 @@
     if (!actionButton) return;
 
     if (actionButton.dataset.action === 'reveal-bs') {
-      revealBsPenalty();
+      openPulseScanner();
     } else if (actionButton.dataset.action === 'reroll-target') {
       rerollTarget();
     }
@@ -2360,6 +2887,7 @@
   }
 
   function stopAllTimers() {
+    closePulseScanner();
     activeTimers.forEach((timer) => {
       timer.running = false;
       if (timer.raf) cancelAnimationFrame(timer.raf);
@@ -3487,6 +4015,19 @@
     el.doneTurnBtn.addEventListener('click', () => completeTurn());
     el.cardContent.addEventListener('click', handleCardContentClick);
 
+    el.pulseScanner.addEventListener('pointerdown', handlePulsePointerDown);
+    el.pulseScanner.addEventListener('pointerleave', handlePulsePointerEnd);
+    el.pulseScanner.addEventListener('pointermove', handlePulsePointerMove);
+    el.pulseScanner.addEventListener('contextmenu', (event) => event.preventDefault());
+    el.pulseScanner.addEventListener('keydown', handlePulseKeyDown);
+    el.pulseScanner.addEventListener('keyup', handlePulseKeyUp);
+    document.addEventListener('pointerup', handlePulsePointerEnd);
+    document.addEventListener('pointercancel', handlePulsePointerEnd);
+    el.pulseCancelBtn.addEventListener('click', cancelPulseScanner);
+    el.pulseOverlay.addEventListener('click', (event) => {
+      if (event.target === el.pulseOverlay) cancelPulseScanner();
+    });
+
     el.groupAnotherBtn.addEventListener('click', groupAnotherCard);
     el.groupEndBtn.addEventListener('click', endGroup);
     el.groupContent.addEventListener('click', handleCardContentClick);
@@ -3566,6 +4107,8 @@
         hideError();
       } else if (!el.curseDetailOverlay.classList.contains('hidden')) {
         closeCurseDetail();
+      } else if (!el.pulseOverlay.classList.contains('hidden')) {
+        if (!pulse.completed) cancelPulseScanner();
       } else if (!el.paranoiaOverlay.classList.contains('hidden')) {
         return;
       } else if (!el.curseOverlay.classList.contains('hidden')) {
@@ -3578,6 +4121,9 @@
     });
 
     document.addEventListener('visibilitychange', syncTimersOnVisibility);
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden && pulse.active) resetPulseHold(true);
+    });
     window.addEventListener('focus', syncTimersOnVisibility);
   }
 
